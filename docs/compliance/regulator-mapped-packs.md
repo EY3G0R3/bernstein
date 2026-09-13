@@ -194,3 +194,22 @@ What the pack does and does not assert:
 - **Control mapping goes through the suite.** A bundle names its suite (`suite_version`); the suite declares its controls (see the table above). `controls.json` carries `bench_assessment`: a control is `measured` when a bundle from a suite declaring it is present (the one with the latest `submitted_at` when several match), else `declared_not_measured`, each with a reason. Bundles from a suite that is not built in cannot be mapped from here and are listed in `bench_assessment._unresolvable_suites`.
 - **`verify_evidence_pack`** checks the manifest's artefact hashes and re-runs every embedded bundle through `SubmissionBundle.from_dict`, the same hash check `bernstein-bench verify` starts with.
 - **What is not verified.** Neither the pack verifier nor `bernstein-bench verify` checks a bundle's `signature`; only reliability receipts carry a trusted-key check today (#5856). Treat an embedded bundle as hash-consistent evidence of what was run, not as attested by a known key.
+
+## NIST OSCAL Assessment-Results Export
+
+`bernstein compliance oscal` exports the same per-control assessment the evidence pack records as a NIST OSCAL v1.1.0 assessment-results document.
+
+```bash
+# Export OSCAL assessment-results to stdout
+bernstein compliance oscal --standard ai-act
+
+# Export OSCAL assessment-results to a JSON file
+bernstein compliance oscal --standard ai-act --out oscal-assessment-results.json
+```
+
+The document models one finding per registered control with its satisfaction state (`satisfied` vs `not-satisfied`), one observation per measured control naming the bundle that measured it, and the clause of the chosen standard each control maps to:
+
+- **Bundles and controls** are read exactly as the evidence pack reads them (see [Benchmark Bundles in Evidence Packs](#benchmark-bundles-in-evidence-packs)); the command **refuses to export** while any bundle under `.sdd/bench/bundles/` does not load, because an assessment-results document that quietly omitted one would assert a coverage it did not check. Bundles from a suite that is not built in are named in the result's `remarks`.
+- **The standard selects the clause.** `--standard` must be one of the pack's supported standards; every finding carries a `clause` prop with the clause of that standard the control maps to in the registry (`unmapped` when it records none). Where several bundles measure a control, the one with the latest `submitted_at` is reported, and the observation's `collected` time is that bundle's own `submitted_at`.
+- **`satisfied` threshold.** A finding is `satisfied` when the bundle's mean task score is at or above `SATISFIED_SCORE_THRESHOLD` (0.99). This is the export's own policy -- the bench harness has no pass threshold -- and every finding's description records the score and the threshold it was judged against.
+- **Signatures** are not verified, as for the pack; the evidence description says so.
