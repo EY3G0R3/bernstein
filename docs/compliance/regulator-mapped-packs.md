@@ -178,7 +178,7 @@ bernstein compliance controls --format markdown
 
 ## Benchmark Bundles in Evidence Packs
 
-`bernstein compliance pack` embeds the signed benchmark bundles it finds and reports, per registered control, whether a bundle from a suite that declares that control was found.
+`bernstein compliance pack` embeds the benchmark bundles it finds and reports, per registered control, whether a bundle from a suite that declares that control was found. The bundles are embedded verbatim and re-checked against their own hashes; their signatures are not checked (see *What is not verified* below).
 
 `bernstein-bench run` writes its bundle wherever `--out` points (default `bundle.json` in the working directory); place the bundles a pack should carry under `.sdd/bench/bundles/` -- the file name is free, the pack keys them by bundle hash:
 
@@ -190,7 +190,7 @@ bernstein-bench run tool-surface-v1 --out .sdd/bench/bundles/tool-surface-v1.jso
 What the pack does and does not assert:
 
 - **Source.** Every `*.json` under `.sdd/bench/bundles/` is loaded through `SubmissionBundle.from_dict`, which recomputes every task's receipt hash and the bundle hash and raises on mismatch. The pack embeds each bundle that loads **byte-for-byte** under `bench-bundles/<bundle-hash>.json`; it is not re-serialised, so the embedded copy still passes `bernstein-bench verify`.
-- **Unreadable bundles are recorded, not dropped.** `controls.json` lists them under `bench_bundles_unreadable` as `{"path", "reason"}`, so an auditor sees that they exist and were not assessed.
-- **Control mapping goes through the suite.** A bundle names its suite (`suite_version`); the suite declares its controls (see the table above). `controls.json` carries `bench_assessment`: a control is `measured` when a bundle from a suite declaring it is present (the most recently listed such bundle), else `declared_not_measured`, each with a reason. Bundles from a suite that is not built in cannot be mapped from here and are listed in `bench_assessment._unresolvable_suites`.
+- **Unreadable bundles are recorded, not dropped.** `controls.json` lists them under `bench_bundles_unreadable` as `{"path", "reason"}`, so an auditor sees that they exist and were not assessed. Their bytes are not embedded in the pack -- only the path and the reason are kept, not the corrupt file itself.
+- **Control mapping goes through the suite.** A bundle names its suite (`suite_version`); the suite declares its controls (see the table above). `controls.json` carries `bench_assessment`: a control is `measured` when a bundle from a suite declaring it is present (the one with the latest `submitted_at` when several match), else `declared_not_measured`, each with a reason. Bundles from a suite that is not built in cannot be mapped from here and are listed in `bench_assessment._unresolvable_suites`.
 - **`verify_evidence_pack`** checks the manifest's artefact hashes and re-runs every embedded bundle through `SubmissionBundle.from_dict`, the same hash check `bernstein-bench verify` starts with.
 - **What is not verified.** Neither the pack verifier nor `bernstein-bench verify` checks a bundle's `signature`; only reliability receipts carry a trusted-key check today (#5856). Treat an embedded bundle as hash-consistent evidence of what was run, not as attested by a known key.

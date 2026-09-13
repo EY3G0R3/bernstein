@@ -18,7 +18,7 @@ from bernstein.compliance.evidence_pack import (
     build_evidence_pack,
     verify_evidence_pack,
 )
-from bernstein.eval.bench.bundle import SubmissionBundle
+from bernstein.eval.bench.bundle import SubmissionBundle, TaskResult
 from bernstein.eval.bench.golden_suite import build_golden_suite_v1
 from bernstein.eval.bench.runner import BenchRunner, MockReplayAdapter
 from bernstein.eval.bench.signer import StubSigner
@@ -232,3 +232,64 @@ class TestEvidencePackBenchBundles:
             assessment = json.loads(zf.read("controls.json").decode("utf-8"))["bench_assessment"]
         assert assessment["_unresolvable_suites"] == ["vendor-suite-v9"]
         assert all(v["status"] == "declared_not_measured" for k, v in assessment.items() if k.startswith("CTL-"))
+
+
+class TestPackTrustBoundaryIsPinned:
+    """The pack re-checks a bundle's own hashes, not its authorship. These are the
+    two gaps that follows from that, held as tests so no one rediscovers them by
+    experiment and files them as bugs (#5856; the on-disk tamper is the #5496 class)."""
+
+    @staticmethod
+    def _sdd_with(tmp_path: Path, bundle: SubmissionBundle) -> Path:
+        sdd = tmp_path / ".sdd"
+        (sdd / "audit").mkdir(parents=True, exist_ok=True)
+        (sdd / "audit" / "events.jsonl").write_text(
+            json.dumps({"timestamp": "2026-01-01T00:00:00Z", "event_type": "tool_call", "hmac": "abc"}) + "\n",
+            encoding="utf-8",
+        )
+        bundles_dir = sdd / "bench" / "bundles"
+        bundles_dir.mkdir(parents=True, exist_ok=True)
+        bundle.save(bundles_dir / f"{bundle.bundle_hash()}.json")
+        return sdd
+
+    def test_a_tampered_then_rehashed_bundle_still_verifies(self, tmp_path: Path) -> None:
+        """A bundle whose contents were altered and then re-hashed and re-signed is
+        self-consistent, so the pack embeds it and ``verify_evidence_pack`` passes it --
+        exactly as ``bench verify`` would. Only the signature could catch this, and
+        nothing checks it yet (#5856). Pinned so the property is on the record."""
+        honest = _signed_bundle(build_golden_suite_v1())
+        first = honest.task_results[0]
+        forged_tr = TaskResult(
+            task_id=first.task_id,
+            task_hash=first.task_hash,
+            receipt={**first.receipt, "run_id": "forged-after-the-fact"},
+            passed=first.passed,
+            score=first.score,
+        )
+        forged = StubSigner().sign(
+            SubmissionBundle(
+                suite_hash=honest.suite_hash,
+                suite_version=honest.suite_version,
+                task_results=[forged_tr, *honest.task_results[1:]],
+                scheduler_config=honest.scheduler_config,
+            )
+        )
+        sdd = self._sdd_with(tmp_path, forged)
+        zip_path = sdd / "evidence.zip"
+        build_evidence_pack(sdd_dir=sdd, standard="ai-act", output_path=zip_path)
+
+        assert verify_evidence_pack(zip_path) is True
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            embedded = json.loads(zf.read(f"bench-bundles/{forged.bundle_hash()}.json").decode("utf-8"))
+        assert embedded["task_results"][0]["receipt"]["run_id"] == "forged-after-the-fact"
+
+    def test_a_pack_carrying_an_unsigned_bundle_still_verifies(self, tmp_path: Path) -> None:
+        """The pack does not require a bundle to be signed; an unsigned one verifies
+        the same as a signed one, because verification is hash-consistency, not
+        attestation (#5856)."""
+        unsigned = BenchRunner(suite=build_golden_suite_v1(), adapter=MockReplayAdapter(), scheduler_config={}).run()
+        assert unsigned.signature == ""
+        sdd = self._sdd_with(tmp_path, unsigned)
+        zip_path = sdd / "evidence.zip"
+        build_evidence_pack(sdd_dir=sdd, standard="ai-act", output_path=zip_path)
+        assert verify_evidence_pack(zip_path) is True

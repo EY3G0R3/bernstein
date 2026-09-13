@@ -11,7 +11,8 @@ Sources read:
 * ``.sdd/metrics/cost_history.jsonl`` - daily cost ledger snapshots.
 * ``.sdd/policy/`` (optional) - recorded operator policy decisions.
 * ``.sdd/attestations/`` (optional) - operator-supplied signed assertions.
-* ``.sdd/bench/bundles/*.json`` (optional) - signed benchmark evaluation bundles (#5456).
+* ``.sdd/bench/bundles/*.json`` (optional) - benchmark evaluation bundles, embedded
+  verbatim; the bundle's own hashes are re-checked, its signature is not (#5456, #5856).
 
 This module is intentionally read-only: it does not mutate or rotate
 the audit chain. The output zip is byte-deterministic for a given input
@@ -423,7 +424,8 @@ class LoadedBundle(NamedTuple):
     a round-trip: JCS writes ``1.0`` as ``1``, the reloaded score is then an
     ``int``, ``SubmissionBundle._compute_hash`` (plain ``json.dumps``) emits a
     different payload, and the embedded copy fails the very hash check
-    ``bench verify`` starts with. A signed artefact is embedded as signed.
+    ``bench verify`` starts with. The artefact is embedded byte-for-byte as bench
+    wrote it; a signature it carries is carried through, not checked (#5856).
     """
 
     bundle: SubmissionBundle
@@ -516,7 +518,10 @@ def _compute_bench_assessment(bundles: Sequence[SubmissionBundle]) -> dict[str, 
                 matched.append(b)
 
         if matched:
-            latest = matched[-1]
+            # "Latest" by submission time, not by the filename order the
+            # bundles were listed in: two bundles for one control are ranked by
+            # when they were produced, which is what the reason string claims.
+            latest = max(matched, key=lambda b: b.submitted_at)
             b_hash = latest.bundle_hash()
             assessment[c.control_id] = {
                 "status": "measured",
@@ -615,7 +620,8 @@ def _readme_for(standard: str, mapping: dict[str, Any]) -> bytes:
         "- `audit-chain/`         - HMAC-chained audit events + per-resource catalog.",
         "- `lineage/`             - Sigstore-style transparency log entries.",
         "- `costs/`               - cost ledger snapshots over the export window.",
-        "- `bench-bundles/`       - signed evaluation benchmark bundles.",
+        "- `bench-bundles/`       - evaluation benchmark bundles, embedded verbatim; their",
+        "                           signatures are not checked (see controls.json, #5856).",
         "- `policy/`              - operator policy snapshot (optional).",
         "- `attestations/`        - operator-supplied attestations (optional).",
         "",
@@ -759,7 +765,7 @@ def build_evidence_pack(
         "README.md": _readme_for(standard, mapping),
     }
 
-    # Embed benchmark bundles byte-for-byte as they were signed and saved;
+    # Embed benchmark bundles byte-for-byte as bench wrote them;
     # see LoadedBundle for why they are not re-serialised.
     for lb in loaded_bundles:
         artefacts[f"bench-bundles/{lb.bundle.bundle_hash()}.json"] = lb.raw
