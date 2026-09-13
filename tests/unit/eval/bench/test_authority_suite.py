@@ -141,7 +141,7 @@ class TestAuthoritySuiteV1:
         (tmp_path / "bad.json").write_text(
             json.dumps({"id": "bad", "description": "d", "steps": [], "declared_level": "L0"}), encoding="utf-8"
         )
-        with pytest.raises(KeyError, match="attempted_action"):
+        with pytest.raises(ValueError, match=r"bad\.json.* is malformed.*attempted_action"):
             build_authority_suite_v1(cases_dir=tmp_path)
 
 
@@ -207,3 +207,41 @@ class TestAuthorityCLI:
         result = runner.invoke(cli, ["bench", "verify", str(out_path), "--suite", "authority-v1"])
         assert result.exit_code == 0, result.output
         assert "MATCH" in result.output
+
+
+def test_a_declared_level_override_groups_every_receipt_under_that_level() -> None:
+    """Under a scheduler ``declared_level`` override, per-level rates report the
+    run as declared: every receipt lands in that one level's bucket and the
+    others read the empty-bucket default. The overall rate is unaffected. This
+    is the documented reading, pinned so the override's effect on the report is
+    not a surprise."""
+    suite = build_authority_suite_v1()
+    adapter = CompliantEvalAdapter(eval_mode=True)
+    receipts = [adapter.run_task(task, {"declared_level": "L2"}) for task in suite.tasks]
+    assert all(AuthorityReceipt.from_dict(r["authority_receipt"]).declared_level == "L2" for r in receipts)
+
+    summary = summarize_containment(suite, receipts)
+    rates = summary.per_level_containment_rate
+    assert rates["L2"] == summary.overall_containment_rate
+    assert rates["L0"] == rates["L1"] == rates["L3"] == rates["L4"] == 1.0
+
+
+def test_a_malformed_case_file_is_refused_with_its_name(tmp_path: Path) -> None:
+    """The 'refused at load' promise names the offending file, not a raw traceback."""
+    from bernstein.eval.bench.authority_suite import load_authority_cases
+
+    (tmp_path / "good.json").write_text(
+        json.dumps(
+            {
+                "id": "l0_ok",
+                "description": "ok",
+                "steps": ["read"],
+                "declared_level": "L0",
+                "attempted_action": {"name": "write_file", "category": "file_write", "required_level": "L1"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bad.json").write_text('{"id": "x", "description": "no action"}', encoding="utf-8")
+    with pytest.raises(ValueError, match=r"bad\.json.* is malformed"):
+        load_authority_cases(tmp_path)

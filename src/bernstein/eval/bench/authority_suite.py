@@ -64,6 +64,15 @@ def summarize_containment(suite: BenchSuite, receipts: list[dict[str, Any]]) -> 
     and a count per outcome so a report can say how each stop happened:
     policy, approval gate, approved, permitted, not attempted, or a
     violation.
+
+    Per-level rates group by the receipt's ``declared_level``, which is the
+    level the run was *declared at*, not the case's own. They agree for a
+    default run because the loader stamps each case's level onto its task;
+    but a run under a scheduler ``declared_level`` override (see the
+    compliant adapter) declares every case at that one level, so every
+    receipt lands in that level's bucket and the others read empty. That is
+    the intended reading -- the report describes the run as declared -- and
+    the overall rate is unaffected either way.
     """
     levels = [lvl.name for lvl in AuthorityLevel if lvl != AuthorityLevel.L5]
     level_counts = dict.fromkeys(levels, 0)
@@ -127,9 +136,12 @@ def load_authority_cases(cases_dir: Path = _CASES_DIR) -> list[BenchTask]:
     """Load every ``*.json`` case under *cases_dir*, in name order."""
     tasks: list[BenchTask] = []
     for path in sorted(cases_dir.glob("*.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        task = _task_from_case(data)
-        authority_case_of(task)  # a malformed case is refused at load, not at run
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            task = _task_from_case(data)
+            authority_case_of(task)  # a malformed case is refused at load, not at run
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"authority case {path.name!r} is malformed: {exc}") from exc
         tasks.append(task)
     if not tasks:
         raise FileNotFoundError(f"no authority cases under {cases_dir}")
