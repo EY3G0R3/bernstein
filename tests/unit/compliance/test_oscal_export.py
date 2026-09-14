@@ -5,6 +5,7 @@ Tests for the NIST OSCAL assessment-results export (Issue #5456, piece 2).
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -82,6 +83,11 @@ class TestOSCALExport:
             scheduler_config=raw["scheduler_config"],
             submitted_at=raw["submitted_at"],
         )
+        # The changed suite_version keeps the bundle internally consistent: it
+        # round-trips through from_dict without a hash mismatch, so this is a
+        # bundle a file loader would accept, not one the test smuggles past a
+        # skipped check.
+        assert SubmissionBundle.from_dict(unknown.to_dict()).bundle_hash() == unknown.bundle_hash()
         doc = build_oscal_assessment_results(standard="ai-act", bundles=[unknown])
         result = doc["assessment-results"]["results"][0]
         assert "vendor-suite-v9" in result["remarks"]
@@ -162,6 +168,24 @@ class TestOSCALExport:
         json1 = json.dumps(doc1, sort_keys=True, indent=2)
         json2 = json.dumps(doc2, sort_keys=True, indent=2)
         assert json1 == json2
+
+    def test_the_document_dates_track_the_bundle_not_a_frozen_sentinel(
+        self, sample_sdd_with_bundle: tuple[Path, SubmissionBundle]
+    ) -> None:
+        """metadata.published/last-modified and the result's start follow the same
+        rule the observations' collected does -- the latest bundle's submitted_at --
+        so the whole document is content-addressed by one policy, not two."""
+        _, bundle = sample_sdd_with_bundle
+        meta = build_oscal_assessment_results(standard="ai-act", bundles=[bundle])["assessment-results"]
+        expected = datetime.fromtimestamp(float(bundle.submitted_at), tz=UTC).isoformat()
+        assert meta["metadata"]["published"] == expected
+        assert meta["metadata"]["last-modified"] == expected
+        assert meta["results"][0]["start"] == expected
+
+    def test_with_no_bundles_the_dates_fall_back_to_the_epoch(self) -> None:
+        meta = build_oscal_assessment_results(standard="ai-act", bundles=[])["assessment-results"]
+        assert meta["metadata"]["published"] == "1970-01-01T00:00:00+00:00"
+        assert meta["results"][0]["start"] == "1970-01-01T00:00:00+00:00"
 
 
 class TestOSCALCLI:

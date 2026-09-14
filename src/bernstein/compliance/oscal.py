@@ -48,6 +48,24 @@ def _deterministic_uuid(name: str) -> str:
     return str(uuid.uuid5(_OSCAL_NAMESPACE, name))
 
 
+_EPOCH = "1970-01-01T00:00:00+00:00"
+
+
+def _document_timestamp(bundles: Sequence[SubmissionBundle]) -> str:
+    """The document's own time: the latest bundle's ``submitted_at``, or the epoch.
+
+    The whole document is content-addressed, so its ``metadata`` timestamps must
+    follow the same rule its observations' ``collected`` does -- the latest
+    bundle's own time -- rather than a frozen sentinel, so two exports of the
+    same assessment are byte-identical and a consumer diffing them never sees a
+    field that claims to be from 1970. With no bundles there is nothing to date
+    and the epoch stands (a document with no observations to place in time).
+    """
+    if not bundles:
+        return _EPOCH
+    return datetime.fromtimestamp(max(float(b.submitted_at) for b in bundles), tz=UTC).isoformat()
+
+
 def _collected_at(bundle: SubmissionBundle) -> str:
     """The bundle's own ``submitted_at`` as an OSCAL timestamp.
 
@@ -99,6 +117,8 @@ def build_oscal_assessment_results(
         for cid in controls_by_suite.get(b.suite_version, ()):
             if cid in control_bundles:
                 control_bundles[cid].append(b)
+
+    document_ts = _document_timestamp(bundles)
 
     observations: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -175,8 +195,8 @@ def build_oscal_assessment_results(
             "uuid": _deterministic_uuid(f"assessment-results-{standard}"),
             "metadata": {
                 "title": f"Bernstein Automated Compliance Assessment Results ({standard})",
-                "published": "1970-01-01T00:00:00+00:00",
-                "last-modified": "1970-01-01T00:00:00+00:00",
+                "published": document_ts,
+                "last-modified": document_ts,
                 "version": "1.0.0",
                 "oscal-version": OSCAL_VERSION,
             },
@@ -190,7 +210,7 @@ def build_oscal_assessment_results(
                     "description": (
                         "Continuous automated evaluation of compliance controls via signed benchmark bundles."
                     ),
-                    "start": "1970-01-01T00:00:00+00:00",
+                    "start": document_ts,
                     "observations": observations,
                     "findings": findings,
                 }
@@ -206,7 +226,16 @@ def build_oscal_assessment_results(
 
 
 def validate_oscal_assessment_results(doc: dict[str, Any]) -> bool:
-    """Validate structure of OSCAL assessment results document."""
+    """Structural check only -- not schema validation.
+
+    Confirms the top-level shape (``assessment-results`` with ``uuid``,
+    ``metadata`` at the right ``oscal-version``, a non-empty ``results`` whose
+    first entry has ``findings`` and ``uuid``). It would pass a document whose
+    findings have no ``target`` or whose observations lack a ``uuid``: real
+    OSCAL schema validation against the published NIST schema is tracked as its
+    own follow-up (#5890, the offline-schema fixture). Named this way so a
+    caller does not read a passing result as schema conformance.
+    """
     if not isinstance(doc, dict):
         return False
     ar = doc.get("assessment-results")
