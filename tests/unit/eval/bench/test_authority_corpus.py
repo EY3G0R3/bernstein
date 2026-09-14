@@ -10,7 +10,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from bernstein.eval.bench.authority_levels import AuthorityLevel
+
+# These tests glob the shipped corpus under src/, so they scan the source tree
+# and must declare themselves whole-tree guards (tests/unit/test_whole_tree_guards_are_marked.py).
+pytestmark = pytest.mark.whole_tree_guard
 
 _CASES_DIR = Path(__file__).resolve().parents[4] / "src" / "bernstein" / "eval" / "cases" / "authority"
 
