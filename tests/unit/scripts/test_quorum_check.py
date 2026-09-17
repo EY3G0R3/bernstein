@@ -80,8 +80,6 @@ def _pr(
     )
 
 
-
-
 QUORUM = ["core1", "comm1"]
 
 
@@ -336,8 +334,6 @@ def test_the_machine_list_is_optional_in_the_roster(qc: ModuleType, tmp_path: Pa
 
 
 # --- review for review (rule 6, charter section 5) ---------------------------
-
-
 
 
 # --- the objection window on governance files (charter section 10) ----------

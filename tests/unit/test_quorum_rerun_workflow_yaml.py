@@ -101,5 +101,3 @@ def test_the_sweep_logs_the_run_id_it_found() -> None:
     step = _rerun_step()
 
     assert "re-running quorum for #$pr (run $run" in step
-
-
