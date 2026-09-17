@@ -575,23 +575,40 @@ def test_pr_filter_does_not_weaken_cross_pr_rules(qh: ModuleType) -> None:
 # --- ensure_labels ----------------------------------------------------------
 
 
-def test_ensure_labels_skips_names_that_already_exist(qh: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-    # `gh label list --json name` answers with a list of objects. Wrapping
-    # that in set() raised on the unhashable dicts, so the first --apply run
-    # died here before any rule ran; the dry run never reaches this function,
-    # which is why it hid.
-    created: list[str] = []
+def _label_list(*names: str) -> list[dict[str, str]]:
+    """The shape ``gh label list --json name`` really returns: a list of
+    ``{"name": ...}`` dicts, one per label, not a list of strings."""
+    return [{"name": name} for name in names]
 
-    def fake_gh_json(*args: str) -> object:
-        assert args[:2] == ("label", "list")
-        return [{"name": "over-wip"}]
+
+def test_ensure_labels_is_a_no_op_when_every_label_already_exists(
+    qh: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: the first cut wrapped the ``gh label list`` result in
+    ``set()``, which raises ``TypeError: unhashable type: 'dict'`` on the list
+    of dicts gh actually returns - and ``ensure_labels`` is the first thing
+    ``main()`` calls under ``--apply``, so every live run crashed before any
+    intent was applied. With every label present, nothing may be created.
+    """
+    wanted = [name for name, _color, _description in qh._LABELS_TO_ENSURE]
+    monkeypatch.setattr(qh, "gh_json", lambda *args: _label_list("bug", "duplicate", "area:core", *wanted))
 
     def fake_gh(*args: str) -> None:
-        assert args[:2] == ("label", "create")
-        created.append(args[2])
+        raise AssertionError(f"gh must not be called when every label exists, got {args}")
 
-    monkeypatch.setattr(qh, "gh_json", fake_gh_json)
     monkeypatch.setattr(qh, "gh", fake_gh)
     qh.ensure_labels("owner/repo")  # must not raise
-    assert "over-wip" not in created
-    assert created == [name for name, _, _ in qh._LABELS_TO_ENSURE if name != "over-wip"]
+
+
+def test_ensure_labels_creates_exactly_the_one_missing_label(qh: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing, color, description = qh._LABELS_TO_ENSURE[0]
+    present = [name for name, _color, _description in qh._LABELS_TO_ENSURE if name != missing]
+    monkeypatch.setattr(qh, "gh_json", lambda *args: _label_list("bug", "duplicate", *present))
+    created: list[tuple[str, ...]] = []
+    monkeypatch.setattr(qh, "gh", lambda *args: created.append(args))
+
+    qh.ensure_labels("owner/repo")
+
+    assert created == [
+        ("label", "create", missing, "--repo", "owner/repo", "--color", color, "--description", description)
+    ]
