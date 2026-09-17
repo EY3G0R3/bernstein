@@ -512,24 +512,17 @@ def evaluate(pr: PullRequest, roster: Roster, owners: list[tuple[str, list[str]]
                 else:
                     hours_left = int(72 - hours_held)
                     req_who = f"nobody - it merges about {hours_left}h from now, or on a second approval sooner"
-            elif (sensitive or has_identity_tokens) and pr.changed_lines <= 400:
-                core_approvals = [
-                    datetime.fromisoformat(standing[login].submitted_at.replace("Z", "+00:00"))
-                    for login in approving_core
-                    if standing[login].commit_id == pr.head_sha and login != roster.maintainer
-                ]
-                if core_approvals:
-                    m_submitted = datetime.fromisoformat(maintainer_approval.submitted_at.replace("Z", "+00:00"))
-                    later_approval = max(m_submitted, min(core_approvals))
-                    hours_held = (now - later_approval).total_seconds() / 3600.0
-                    if hours_held >= 72:
-                        req_met = True
-                        req_who = "maintainer and one core approval held 72 hours (charter, section 3)"
-                    else:
-                        hours_left = int(72 - hours_held)
-                        req_who = f"nobody - it merges about {hours_left}h from now"
+            elif (sensitive or has_identity_tokens or pr.changed_lines > 1000) and not (
+                has_identity_tokens and pr.changed_lines > 400
+            ):
+                submitted_at = datetime.fromisoformat(maintainer_approval.submitted_at.replace("Z", "+00:00"))
+                hours_held = (now - submitted_at).total_seconds() / 3600.0
+                if hours_held >= 168:
+                    req_met = True
+                    req_who = "maintainer approval held seven days without objection (charter, section 3)"
                 else:
-                    req_who = "one core approval"
+                    hours_left = int(168 - hours_held)
+                    req_who = f"nobody - it merges about {hours_left}h from now"
 
         verdict.requirements.append(
             Requirement(

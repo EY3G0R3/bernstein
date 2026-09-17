@@ -20,8 +20,7 @@ owner's approval too, so a core reviewer's approval does not stand in for a code
 owner's on a path the owner holds. A new push dismisses earlier approvals, and
 the person who pushed last cannot supply the final one. A change over 400
 lines, or one touching a path with `sandbox`, `security`, or `audit` in it,
-needs three approvals, two of them from core reviewers, and over 1,000 lines
-gets split or sent to the maintainer instead. Where two approvals are enough,
+needs three approvals (two from core), but a sensitive or >1000L change may merge on the maintainer's 7-day approval. An unanswered core objection older than 7 days may also be dismissed by the maintainer. Where two approvals are enough,
 the second may come from the review automation named in the roster under
 `machine_reviewers`; that approval is never the core one, never the only one,
 and never stands in for a code owner or the maintainer.

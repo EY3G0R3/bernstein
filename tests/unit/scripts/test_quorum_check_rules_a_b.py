@@ -87,49 +87,59 @@ def test_rule_a_stale_objection(roster):
     assert any("changes requested" in req.text for req in v.requirements if not req.met)
 
 
-def test_rule_b_small_sensitive(roster):
-    # met
+def test_rule_a1_sensitive_large(roster):
+    # sensitive 900 lines + maintainer at 168h -> met
+    pr = _pr(paths=["sandbox/foo.py"], changed_lines=900, reviews=[_review("owner", "APPROVED", hours_ago=168)])
+    v = quorum_check.evaluate(pr, roster, [], now)
+    assert v.passed
+
+    # at 100h -> not met, who reads 'about 68h'
+    pr = _pr(paths=["sandbox/foo.py"], changed_lines=900, reviews=[_review("owner", "APPROVED", hours_ago=100)])
+    v = quorum_check.evaluate(pr, roster, [], now)
+    assert not v.passed
+    assert any("about 68h" in req.who for req in v.requirements if not req.met)
+
+    # 1,500 ordinary lines + maintainer at 168h -> met
+    pr = _pr(paths=["src/bernstein/app.py"], changed_lines=1500, reviews=[_review("owner", "APPROVED", hours_ago=168)])
+    v = quorum_check.evaluate(pr, roster, [], now)
+    assert v.passed
+
+    # at 72h -> not met
+    pr = _pr(paths=["src/bernstein/app.py"], changed_lines=1500, reviews=[_review("owner", "APPROVED", hours_ago=72)])
+    v = quorum_check.evaluate(pr, roster, [], now)
+    assert not v.passed
+
+    # `core/identity/` 500 lines + maintainer at 168h -> not met
     pr = _pr(
-        paths=["sandbox/foo.py"],
-        changed_lines=400,
-        reviews=[_review("owner", "APPROVED", hours_ago=73), _review("core1", "APPROVED", hours_ago=72)],
+        paths=["src/bernstein/core/identity/foo.py"],
+        changed_lines=500,
+        reviews=[_review("owner", "APPROVED", hours_ago=168)],
+    )
+    v = quorum_check.evaluate(pr, roster, [], now)
+    assert not v.passed
+
+    # `core/identity/` 300 lines at 168h -> met
+    pr = _pr(
+        paths=["src/bernstein/core/identity/foo.py"],
+        changed_lines=300,
+        reviews=[_review("owner", "APPROVED", hours_ago=168)],
     )
     v = quorum_check.evaluate(pr, roster, [], now)
     assert v.passed
 
-    # missing core
-    pr = _pr(paths=["sandbox/foo.py"], changed_lines=400, reviews=[_review("owner", "APPROVED", hours_ago=73)])
-    v = quorum_check.evaluate(pr, roster, [], now)
-    assert not v.passed
-    assert any("one core approval" in req.who for req in v.requirements if not req.met)
-
-    # 401 lines excluded
+    # a committer's changes requested inside the window -> not met
     pr = _pr(
         paths=["sandbox/foo.py"],
-        changed_lines=401,
-        reviews=[_review("owner", "APPROVED", hours_ago=73), _review("core1", "APPROVED", hours_ago=72)],
+        changed_lines=900,
+        reviews=[_review("owner", "APPROVED", hours_ago=168), _review("comm1", "CHANGES_REQUESTED", hours_ago=1)],
     )
     v = quorum_check.evaluate(pr, roster, [], now)
     assert not v.passed
 
-    # 71 h
-    pr = _pr(
-        paths=["sandbox/foo.py"],
-        changed_lines=400,
-        reviews=[_review("owner", "APPROVED", hours_ago=73), _review("core1", "APPROVED", hours_ago=71)],
-    )
-    v = quorum_check.evaluate(pr, roster, [], now)
-    assert not v.passed
 
-    # CR blocks
-    pr = _pr(
-        paths=["sandbox/foo.py"],
-        changed_lines=400,
-        reviews=[
-            _review("owner", "APPROVED", hours_ago=73),
-            _review("core1", "APPROVED", hours_ago=72),
-            _review("comm1", "CHANGES_REQUESTED", hours_ago=1),
-        ],
-    )
+def test_rule_a2_unanswered_objection_dismissed_does_not_block(roster):
+    # a DISMISSED review from a core reviewer does not block
+    pr = _pr(reviews=[_review("core1", "APPROVED", hours_ago=10), _review("core2", "DISMISSED", hours_ago=10)])
     v = quorum_check.evaluate(pr, roster, [], now)
-    assert not v.passed
+    # The requirement about "changes requested" should be met (since it's dismissed)
+    assert not any("changes requested" in req.text for req in v.requirements if not req.met)
