@@ -265,6 +265,7 @@ def test_parent_env_is_not_leaked(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     # Cleanup: os.environ is scoped to this test via monkeypatch.
     assert os.environ.get("SUPER_SECRET_FOO") == "leak-me"
 
+
 def test_dispatch_post_merge_event(tmp_path: Path) -> None:
     received: list[LifecycleContext] = []
 
