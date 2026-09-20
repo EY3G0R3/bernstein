@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from bernstein.core.volunteer.adapter_selection import select_adapter_for_volunteer
 
