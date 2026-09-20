@@ -1792,7 +1792,10 @@ def _await_first_spawn_outcome(
             try:
                 on_poll()
             except Exception as exc:
-                logger.warning("on_poll callback failed: %s", exc, exc_info=True)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.warning("on_poll callback failed: %s", exc, exc_info=True)
+                else:
+                    logger.debug("on_poll callback failed: %s", exc, exc_info=True)
         health = server_get("/health")
         if not isinstance(health, dict):
             unreachable_polls += 1

@@ -746,7 +746,10 @@ class TaskStateProgressTracker:
                 tasks = _extract_tasks_from_payload(status_data)
             return self.update_tasks(tasks)
         except Exception as exc:
-            logger.warning("Failed to poll task progress: %s", exc, exc_info=True)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.warning("Failed to poll task progress: %s", exc, exc_info=True)
+            else:
+                logger.debug("Failed to poll task progress: %s", exc, exc_info=True)
             return []
 
 
