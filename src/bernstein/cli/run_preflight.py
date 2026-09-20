@@ -714,8 +714,8 @@ class TaskStateProgressTracker:
             if not task_id:
                 continue
             current_state = str(task.get("status") or "open")
-            adapter = str(task.get("adapter") or task.get("cli") or "auto")
-            model = str(task.get("model") or "default")
+            adapter = str(task.get("adapter") or task.get("cli") or "unknown")
+            model = str(task.get("model") or "unknown")
             title = str(task.get("title") or "")
 
             if task_id not in self.seen_states:
