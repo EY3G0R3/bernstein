@@ -1,4 +1,4 @@
-"""Tests for ModelCallLedger CLI commands - CLI invocation layer."""
+"""Tests for ModelCallLedger CLI commands - verify fail-closed behavior."""
 
 from __future__ import annotations
 
@@ -43,8 +43,8 @@ def test_cli_reuse_identical_flag_short_circuits(
     sdd_dir: Path,
     runner: CliRunner,
 ) -> None:
-    """The --reuse-identical flag short-circuits on matching content hash."""
-    # Arrange: write one succeeded record to the ledger
+    """The CLI commands fail closed when no real adapter is available."""
+    # Arrange: write one succeeded record to the ledger using library API
     call_count = 0
 
     def mock_call() -> str:
@@ -63,7 +63,7 @@ def test_cli_reuse_identical_flag_short_circuits(
     assert call_count == 1
     assert first.status == "succeeded"
 
-    # Act: invoke via CLI with --reuse-identical and the same input
+    # Act: invoke via CLI - should fail closed
     result = runner.invoke(
         cost_cmd,
         [
@@ -85,17 +85,11 @@ def test_cli_reuse_identical_flag_short_circuits(
         ],
     )
 
-    # Assert: CLI succeeded, adapter was NOT called again
-    assert result.exit_code == 0, result.output
-    # The CLI should report reuse
-    assert "reused" in result.output.lower() or first.id in result.output
-    # Read back from ledger - create fresh instance to force reload from disk
-    fresh_ledger = ModelCallLedger(sdd_dir)
-    records = fresh_ledger.list_records(limit=10)
-    assert len(records) == 2  # first + reused
-    reused = records[1]
-    assert reused.reused_from == first.id
-    assert reused.output_text == first.output_text
+    # Assert: CLI fails closed with clear error message
+    assert result.exit_code == 1
+    assert "Real adapter invocation requires a running agent session" in result.output
+    assert "test scaffolding" in result.output.lower()
+    assert "ModelCallLedger library API" in result.output
 
 
 def test_cli_replay_record_id(
@@ -103,8 +97,8 @@ def test_cli_replay_record_id(
     sdd_dir: Path,
     runner: CliRunner,
 ) -> None:
-    """The replay subcommand re-executes a stored call and writes a new linked record."""
-    # Arrange: write one record
+    """The replay subcommand fails closed when no real adapter is available."""
+    # Arrange: write one record using library API
     original = ledger.invoke(
         capability_id="test-cap",
         adapter_id="test-adapter",
@@ -115,7 +109,7 @@ def test_cli_replay_record_id(
     )
     assert original.output_text == "first output"
 
-    # Act: replay via CLI
+    # Act: replay via CLI - should fail closed
     result = runner.invoke(
         cost_cmd,
         [
@@ -128,18 +122,13 @@ def test_cli_replay_record_id(
         ],
     )
 
-    # Assert: CLI succeeded, new record written
-    assert result.exit_code == 0, result.output
-    # Read back from ledger - create fresh instance to force reload from disk
+    # Assert: CLI fails closed with clear error message
+    assert result.exit_code == 1
+    assert "Real adapter invocation requires a running agent session" in result.output
+    assert "test scaffolding" in result.output.lower()
+    assert "ModelCallLedger library API" in result.output
+    
+    # Verify the original record is untouched (no replay happened)
     fresh_ledger = ModelCallLedger(sdd_dir)
     records = fresh_ledger.list_records(limit=10)
-    assert len(records) == 2
-    replayed = records[1]
-    assert replayed.replay_of == original.id
-    # CLI uses mock adapter that returns fixed string
-    assert replayed.output_text == "Replayed output for test-model"
-    assert replayed.id != original.id
-    # Original is untouched
-    original_refreshed = fresh_ledger.get_record(original.id)
-    assert original_refreshed is not None
-    assert original_refreshed.output_text == "first output"
+    assert len(records) == 1  # Only the original, no replay
