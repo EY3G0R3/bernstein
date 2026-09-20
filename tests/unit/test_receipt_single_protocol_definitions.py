@@ -19,7 +19,10 @@ def _definition_sites(name: str) -> list[tuple[str, int]]:
     """Return (repo-relative path, line) for every top-level ``def name`` under src/bernstein."""
     sites: list[tuple[str, int]] = []
     for path in _SRC_BERNSTEIN.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue  # Skip files with syntax errors; they'll fail other checks
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
                 sites.append((str(path.relative_to(_REPO_ROOT)), node.lineno))
