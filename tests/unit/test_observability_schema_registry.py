@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-import pytest
-
 from bernstein.core.observability.schema_registry import (
     SCHEMAS,
-    FieldType,
     get_schema,
     validate_record,
 )
@@ -90,7 +84,7 @@ class TestSchemaRegistry:
 
     def test_validate_record_unknown_field_detected(self) -> None:
         """validate_record fails when record has an undeclared field.
-        
+
         This is the guard test proving the registry can detect rogue fields.
         Writers do not yet stamp schema_version (later slice), but the
         registry can validate against it once they do.
@@ -198,11 +192,44 @@ class TestMultiStreamValidation:
     def test_unknown_field_fails_across_streams(self) -> None:
         """Unknown fields are detected in any registered stream."""
         streams_to_test = [
-            ("tasks", {"task_id": "t1", "role": "qa", "status": "done", "start_time": 1.0, "schema_version": "v1", "bogus": "x"}),
-            ("cost", {"task_id": "t1", "model": "m", "provider": "p", "tokens_prompt": 1, "tokens_completion": 1, "cost_usd": 0.01, "timestamp": 1.0, "schema_version": "v1", "extra": "y"}),
-            ("guardrails", {"event_type": "e", "severity": "low", "detail": "d", "timestamp": 1.0, "schema_version": "v1", "invalid": "z"}),
+            (
+                "tasks",
+                {
+                    "task_id": "t1",
+                    "role": "qa",
+                    "status": "done",
+                    "start_time": 1.0,
+                    "schema_version": "v1",
+                    "bogus": "x",
+                },
+            ),
+            (
+                "cost",
+                {
+                    "task_id": "t1",
+                    "model": "m",
+                    "provider": "p",
+                    "tokens_prompt": 1,
+                    "tokens_completion": 1,
+                    "cost_usd": 0.01,
+                    "timestamp": 1.0,
+                    "schema_version": "v1",
+                    "extra": "y",
+                },
+            ),
+            (
+                "guardrails",
+                {
+                    "event_type": "e",
+                    "severity": "low",
+                    "detail": "d",
+                    "timestamp": 1.0,
+                    "schema_version": "v1",
+                    "invalid": "z",
+                },
+            ),
         ]
-        
+
         for stream_name, record in streams_to_test:
             errors = validate_record(stream_name, record)
             assert len(errors) == 1, f"Stream {stream_name} should reject unknown field"
