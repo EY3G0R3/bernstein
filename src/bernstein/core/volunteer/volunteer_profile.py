@@ -172,8 +172,6 @@ def load_profile(source: str | bytes) -> VolunteerProfile:
         raw: dict[str, Any] = json.loads(text)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VolunteerProfileError("<document>", f"not valid JSON: {exc}") from exc
-    # Type is already checked via annotation
-        raise VolunteerProfileError("<document>", f"expected a JSON object, got {type(raw).__name__}")
 
     return VolunteerProfile(
         version=_load_version(raw),

@@ -13,10 +13,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from bernstein.core.volunteer.volunteer_profile import VolunteerProfile
 
 logger = logging.getLogger(__name__)
@@ -246,9 +247,12 @@ class AutopilotLoop:
             True if task matches profile policy.
         """
         # Task type filter
-        if self.profile.allowed_task_types and hasattr(task, "task_type"):
-            if task.task_type not in self.profile.allowed_task_types:
-                return False
+        if (
+            self.profile.allowed_task_types
+            and hasattr(task, "task_type")
+            and task.task_type not in self.profile.allowed_task_types
+        ):
+            return False
 
         # Size filter
         if hasattr(task, "size"):
