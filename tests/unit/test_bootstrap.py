@@ -660,28 +660,28 @@ def test_start_watchdog_surfaces_a_dead_on_arrival_watchdog(tmp_path: Path) -> N
 
 def test_watchdog_does_not_restart_after_quiescence_self_stop(tmp_path: Path) -> None:
     """A deliberate quiescence self-stop is not a crash - watchdog does not restart.
-    
+
     Regression guard for issue #6089 slice 1: after the orchestrator exits on
     "Quiescence confirmed ... self-stopping", the watchdog saw a dead spawner
     pidfile and restarted it five times, creating five empty run directories.
-    
+
     A marker file next to spawner.pid signals deliberate shutdown. The watchdog
     must read it and skip restart.
     """
     from bernstein.core.orchestration.bootstrap import _watchdog_check_process
     from bernstein.core.orchestration.process_utils import LIVENESS_GONE
-    
+
     runtime_dir = tmp_path / ".sdd" / "runtime"
     runtime_dir.mkdir(parents=True)
-    
+
     # Simulate orchestrator writing the deliberate-stop marker
     marker_path = runtime_dir / "spawner-deliberate-stop"
     marker_path.write_text("quiescence")
-    
+
     restart_fn = MagicMock(return_value=99999)
-    
+
     # Dead spawner, deliberate-stop marker present -> no restart
-    alive_since, restarts, give_up = _watchdog_check_process(
+    _alive_since, restarts, _give_up = _watchdog_check_process(
         name="Orchestrator",
         pid=None,
         alive_since=None,
@@ -694,31 +694,31 @@ def test_watchdog_does_not_restart_after_quiescence_self_stop(tmp_path: Path) ->
         liveness=LIVENESS_GONE,
         workdir=tmp_path,
     )
-    
+
     restart_fn.assert_not_called()
     assert restarts == 0
 
 
 def test_watchdog_still_restarts_a_crashed_spawner(tmp_path: Path) -> None:
     """A spawner that dies without a deliberate-stop marker is still restarted.
-    
+
     Guard for issue #6089 slice 1: the deliberate-stop marker must not disable
     restart for genuine crashes. No marker + dead pid -> restart as before.
     """
     from bernstein.core.orchestration.bootstrap import _watchdog_check_process
     from bernstein.core.orchestration.process_utils import LIVENESS_GONE
-    
+
     runtime_dir = tmp_path / ".sdd" / "runtime"
     runtime_dir.mkdir(parents=True)
-    
+
     # No marker present
     marker_path = runtime_dir / "spawner-deliberate-stop"
     assert not marker_path.exists()
-    
+
     restart_fn = MagicMock(return_value=99999)
-    
+
     # Dead spawner, no marker -> restart as usual
-    alive_since, restarts, give_up = _watchdog_check_process(
+    _alive_since, restarts, _give_up = _watchdog_check_process(
         name="Orchestrator",
         pid=None,
         alive_since=None,
@@ -731,6 +731,6 @@ def test_watchdog_still_restarts_a_crashed_spawner(tmp_path: Path) -> None:
         liveness=LIVENESS_GONE,
         workdir=tmp_path,
     )
-    
+
     restart_fn.assert_called_once()
     assert restarts == 1

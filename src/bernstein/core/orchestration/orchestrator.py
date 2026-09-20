@@ -1150,10 +1150,8 @@ class Orchestrator:
         # Clear deliberate-stop marker from any previous run (issue #6089 slice 1).
         _marker_path = self._workdir / ".sdd" / "runtime" / "spawner-deliberate-stop"
         if _marker_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 _marker_path.unlink()
-            except OSError:
-                pass  # Non-fatal
     # -- Hot-reload source detection -----------------------------------------
 
     # Key source files whose modification triggers an orchestrator restart.
@@ -2626,10 +2624,8 @@ class Orchestrator:
                             self._regenerate_final_retrospective(trigger_path="tick-quiescence-self-stop")
                             # Write deliberate-stop marker for watchdog (issue #6089 slice 1).
                             _marker_path = self._workdir / ".sdd" / "runtime" / "spawner-deliberate-stop"
-                            try:
+                            with contextlib.suppress(OSError):
                                 _marker_path.write_text("quiescence")
-                            except OSError:
-                                pass  # Non-fatal - watchdog will use max_restarts fallback
                             self._running = False
                     else:
                         logger.info(
