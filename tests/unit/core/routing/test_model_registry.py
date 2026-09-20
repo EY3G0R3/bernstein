@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from bernstein.core.lineage.entry import ModelRef
+from bernstein.core.routing import cascade_router, escalation_ladder, model_fallback, route_decision
 from bernstein.core.routing.model_registry import (
     ANY_TASK_CLASS,
     EVENT_MODEL_ADMITTED,
@@ -33,9 +34,7 @@ from bernstein.core.routing.model_registry import (
     record_model_admission,
     record_model_withdrawal,
 )
-from bernstein.core.routing import cascade_router, escalation_ladder, model_fallback, route_decision
-from bernstein.core.security.audit_chain import EVENT_MODEL_REFUSED
-from bernstein.core.security.audit_chain import AuditChainStore
+from bernstein.core.security.audit_chain import EVENT_MODEL_REFUSED, AuditChainStore
 
 if TYPE_CHECKING:
     from pathlib import Path
