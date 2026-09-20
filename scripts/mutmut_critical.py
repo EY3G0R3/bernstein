@@ -108,20 +108,53 @@ MODULES: tuple[Module, ...] = (
     Module(
         key="lineage_gate",
         source="src/bernstein/core/lineage/gate.py",
-        tests=("tests/unit/lineage/",),
+        # The four files that exercise the admission gate through `check`,
+        # plus the adversarial suite that attacks the same invariants. The
+        # directory has 707 tests and takes ~154s; these four have 76 and take
+        # ~7s, so the baseline stops paying for 631 tests that cannot kill a
+        # single mutant in gate.py (issue #5595).
+        tests=(
+            "tests/unit/lineage/test_gate.py",
+            "tests/unit/lineage/test_provenance_gate.py",
+            "tests/unit/lineage/test_sensitivity.py",
+            "tests/unit/security/test_lineage_adversarial.py",
+        ),
         threshold=0.75,
         budget_seconds=900,
         max_candidates=60,
-        note="Lineage v1 admission gate.",
+        note="Lineage v1 admission gate. Baseline ~7s over 76 tests (was ~154s over 707).",
     ),
     Module(
         key="lineage_tips",
         source="src/bernstein/core/lineage/tips.py",
-        tests=("tests/unit/lineage/",),
+        # The five files that actually detect a break in tips.py, plus the two
+        # that import it. Measured, not guessed: seeding `compute_tips`,
+        # `detect_forks` and `_group_by_path` with degenerate returns and
+        # running the whole of tests/unit/lineage/ fails exactly
+        # test_tips, test_gate, test_cli, test_conflict_cli and
+        # test_artifact_uri_boundaries. test_merge and test_signed_write_golden
+        # import tips without asserting on it and are kept as headroom, so a
+        # mutation on a line none of the five reaches is still seen.
+        #
+        # The directory has 706 tests and takes ~92s; these seven have 158 and
+        # take ~11s. That gap is not the tests -- 76s of the 89s is per-test
+        # autouse-fixture teardown, ~108ms on every test, against 11.3s of
+        # actual test work. The baseline therefore paid for 548 tests that
+        # cannot kill a single mutant, once for the baseline and again for
+        # every mutant run (#5595).
+        tests=(
+            "tests/unit/lineage/test_tips.py",
+            "tests/unit/lineage/test_gate.py",
+            "tests/unit/lineage/test_cli.py",
+            "tests/unit/lineage/test_conflict_cli.py",
+            "tests/unit/lineage/test_artifact_uri_boundaries.py",
+            "tests/unit/lineage/test_merge.py",
+            "tests/unit/lineage/test_signed_write_golden.py",
+        ),
         threshold=0.75,
         budget_seconds=600,
         max_candidates=60,
-        note="Lineage v1 tip tracker.",
+        note="Lineage v1 tip tracker. Baseline ~11s over 158 tests (was ~92s over 706).",
     ),
     Module(
         key="lineage_merge",
@@ -138,6 +171,7 @@ MODULES: tuple[Module, ...] = (
         tests=(
             "tests/unit/test_config_schema.py",
             "tests/unit/test_seed_parser_mutation_kill.py",
+            "tests/unit/test_seed_team_manifest.py",
         ),
         threshold=0.70,
         budget_seconds=1200,
