@@ -34,7 +34,6 @@ from bernstein.core.persistence.atomic_write import write_atomic_text
 if TYPE_CHECKING:
     from pathlib import Path
     from collections.abc import Mapping
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -366,11 +365,11 @@ def verify_rollback_receipt(
         for entry in spine.iter_entries()
     )
     if not anchored:
-        return RollbackVerifyResult(
-            ok=False,
-            reason="receipt is not anchored in the evolution-rollback spine",
-            receipt=receipt
-        )
+            return RollbackVerifyResult(
+                ok=False,
+                reason="receipt is not anchored in the evolution-rollback spine",
+                receipt=receipt
+            )
     return RollbackVerifyResult(ok=True, reason="", receipt=receipt)
 
 
