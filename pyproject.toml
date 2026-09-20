@@ -336,7 +336,7 @@ research-render = [
 # TRACE 0.2 Trust Record emitter (src/bernstein/core/observability/trust_record.py).
 # Optional so minimal installs stay dependency-free. Enable with:
 #   pip install 'bernstein[trace]'
-trace = ["agentrust-trace>=0.9,<0.10"]
+trace = ["agentrust-trace>=0.10,<0.11"]
 
 [project.scripts]
 bernstein = "bernstein.cli.main:cli"
@@ -459,6 +459,8 @@ artifacts = [
     # firewall loads them at startup to validate every incoming MCP tool
     # call. Loader: bernstein.mcp.input_validation.load_registry.
     "src/bernstein/mcp/tool_schemas/*.json",
+    # OSCAL v1.1.0 assessment-results schema for compliance exports.
+    "src/bernstein/compliance/oscal_schema/*.json",
     # Doctor doc-suggestion seed list. Curated list of common documentation
     # gaps surfaced by `bernstein doctor --suggest-docs`. Operator refreshes
     # it on each release. Loader:
@@ -769,7 +771,7 @@ languages = ["zh-Hans", "zh-TW", "ja", "ko", "hi", "bn", "ru", "es", "pt", "de",
 # standing obligation. Handing a language over is a one-line change to
 # this table, made by the person taking it on.
 [tool.bernstein.readme-l10n.owners]
-"zh-Hans" = "@chernistry"
+"zh-Hans" = "@7487"
 "zh-TW" = "@chernistry"
 "ja" = "@chernistry"
 "ko" = "@Bhumika-1432006"
@@ -790,7 +792,7 @@ languages = ["zh-Hans", "zh-TW", "ja", "ko", "hi", "bn", "ru", "es", "pt", "de",
 "ar" = "@thegoodengineer"
 "he" = "@Bhumika-1432006"
 "id" = "@thegoodengineer"
-"vi" = "@chernistry"
+"vi" = "@thegoodengineer"
 "th" = "@thegoodengineer"
 
 [tool.pytest.ini_options]
