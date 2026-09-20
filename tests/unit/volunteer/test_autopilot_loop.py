@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -41,7 +40,7 @@ class FakeTaskSource(Protocol):
 
 class InMemoryTaskSource:
     """Fake TaskSource for testing, never touches network or processes.
-    
+
     Implements the protocol properly: claim_next returns a task without
     side-effects, and the loop is responsible for filtering and deciding
     whether to actually proceed with run/submit.
@@ -61,14 +60,14 @@ class InMemoryTaskSource:
         while self.next_index < len(self.available_tasks):
             task = self.available_tasks[self.next_index]
             self.next_index += 1
-            
+
             # Source applies project filter (the primary filter)
             if task.project in profile.allowed_projects:
                 # Mark as "claimed" for tracking purposes, but the loop
                 # will release and retry if other filters don't match
                 self.claimed.append(task.id)
                 return task
-        
+
         return None
 
     async def run(self, task: FakeTask) -> str:
