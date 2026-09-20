@@ -1794,6 +1794,124 @@ estimate_alias_cmd = click.Command(
 cost_cmd.add_command(cost_envelopes_group, "envelopes")
 
 
+@click.group("model-call")
+def model_call_group() -> None:
+    """Model call ledger operations: invoke with reuse, replay records."""
+
+
+@model_call_group.command("invoke")
+@click.option("--sdd-dir", "sdd_dir", type=str, required=True, help="Path to .sdd directory.")
+@click.option("--capability-id", type=str, required=True, help="Capability making the call.")
+@click.option("--adapter-id", type=str, required=True, help="Adapter the call goes to.")
+@click.option("--model", type=str, required=True, help="Model identifier.")
+@click.option("--model-version", type=str, default="", help="Provider version string for model.")
+@click.option("--parameters", type=str, default="{}", help="JSON object of resolved parameters.")
+@click.option("--parameter-schema-version", type=str, default="", help="Adapter parameter schema version.")
+@click.option("--input", "input_text", type=str, required=True, help="Input text being sent.")
+@click.option("--journal-entry-id", type=str, default="", help="Work ledger entry this call belongs to.")
+@click.option("--reuse-identical", is_flag=True, default=False, help="Short-circuit on matching content hash.")
+def model_call_invoke(
+    sdd_dir: str,
+    capability_id: str,
+    adapter_id: str,
+    model: str,
+    model_version: str,
+    parameters: str,
+    parameter_schema_version: str,
+    input_text: str,
+    journal_entry_id: str,
+    reuse_identical: bool,
+) -> None:
+    """Invoke adapter and write ledger record, optionally reusing identical calls."""
+    from pathlib import Path
+
+    from bernstein.core.cost.model_call_ledger import ModelCallLedger
+
+    # Parse parameters JSON
+    try:
+        params_dict = json.loads(parameters)
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]Invalid JSON in --parameters: {exc}[/red]")
+        raise click.Abort from exc
+
+    ledger = ModelCallLedger(Path(sdd_dir))
+
+    # Mock adapter call for CLI testing - in production this would call the real adapter
+    def mock_adapter_call() -> str:
+        return f"Mock output for {model}"
+
+    record = ledger.invoke(
+        capability_id=capability_id,
+        adapter_id=adapter_id,
+        model=model,
+        call=mock_adapter_call,
+        model_version=model_version,
+        parameters=params_dict,
+        parameter_schema_version=parameter_schema_version,
+        input_text=input_text,
+        journal_entry_id=journal_entry_id,
+        reuse_identical=reuse_identical,
+    )
+
+    if record.reused:
+        console.print(f"[green]Reused record {record.reused_from}[/green]")
+    console.print(f"Record ID: {record.id}")
+    console.print(f"Status: {record.status}")
+    console.print(f"Output: {record.output_text}")
+
+
+@model_call_group.command("replay")
+@click.option("--sdd-dir", "sdd_dir", type=str, required=True, help="Path to .sdd directory.")
+@click.option("--record-id", type=str, required=True, help="ID of the record to replay.")
+def model_call_replay(sdd_dir: str, record_id: str) -> None:
+    """Re-execute a stored call and write a new linked record."""
+    from pathlib import Path
+
+    from bernstein.core.cost.model_call_ledger import ModelCallLedger
+
+    ledger = ModelCallLedger(Path(sdd_dir))
+
+    original = ledger.get_record(record_id)
+    if original is None:
+        console.print(f"[red]Record {record_id} not found[/red]")
+        raise click.Abort
+
+    # Mock adapter call for CLI testing - in production this would call the real adapter
+    def mock_adapter_call() -> str:
+        return f"Replayed output for {original.model}"
+
+    record = ledger.replay(record_id, call=mock_adapter_call)
+    if record is None:
+        console.print(f"[red]Replay failed for record {record_id}[/red]")
+        raise click.Abort
+
+    console.print(f"[green]Replayed record {record_id}[/green]")
+    console.print(f"New record ID: {record.id}")
+    console.print(f"Replay of: {record.replay_of}")
+    console.print(f"Status: {record.status}")
+    console.print(f"Output: {record.output_text}")
+
+
+cost_cmd.add_command(model_call_group, "model-call")
+
+
+#: The alias reuses the canonical command's Parameter objects rather than
+#: re-declaring them, so `bernstein estimate` cannot come to parse, default or
+#: reject an invocation differently from `bernstein cost estimate`. Re-declared
+#: options drift silently: a changed Choice set or default reads as identical
+#: under a name-by-name comparison.
+estimate_alias_cmd = click.Command(
+    "estimate",
+    params=list(estimate_cmd.params),
+    callback=_estimate_alias_callback,
+    help="[Deprecated] Predict task cost before running (use 'bernstein cost estimate').",
+    short_help="[Deprecated] Predict task cost before running.",
+)
+
+
+cost_cmd.add_command(cost_envelopes_group, "envelopes")
+
+
 @click.group("cost-envelopes")
 @click.pass_context
 def cost_envelopes_alias_cmd(ctx: click.Context) -> None:
