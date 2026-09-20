@@ -1196,9 +1196,7 @@ class TestVerifyBOMOffline:
             timestamp=1767225720,
         )
 
-    def test_bom_verify_fails_closed_when_component_hash_does_not_resolve(
-        self, tmp_path: Path
-    ) -> None:
+    def test_bom_verify_fails_closed_when_component_hash_does_not_resolve(self, tmp_path: Path) -> None:
         """A model sha256 not present in the spine makes verify fail at that line item."""
         spine = self._spine(tmp_path)
         self._seed(spine)
@@ -1209,6 +1207,7 @@ class TestVerifyBOMOffline:
 
         # Tamper with the model hash in the BOM
         import json
+
         tampered = json.loads(bom_bytes.decode())
         # Change the first model's sha256 to something not in the spine
         tampered["models"][0]["sha256"] = "sha256:" + "f" * 64
@@ -1217,13 +1216,11 @@ class TestVerifyBOMOffline:
         report = verify_bom_offline(tampered_bytes, spine, b"k" * 32)
         assert report.ok is False
         # Error should name the specific line item
-        assert any(
-            "models[0].sha256" in e and "not found in lineage spine" in e for e in report.errors
-        ), f"Expected error naming models[0].sha256, got: {report.errors}"
+        assert any("models[0].sha256" in e and "not found in lineage spine" in e for e in report.errors), (
+            f"Expected error naming models[0].sha256, got: {report.errors}"
+        )
 
-    def test_bom_verify_fails_closed_when_head_anchor_mismatches(
-        self, tmp_path: Path
-    ) -> None:
+    def test_bom_verify_fails_closed_when_head_anchor_mismatches(self, tmp_path: Path) -> None:
         """A lineage_root_hash mismatch makes verify fail with the mismatched values."""
         spine = self._spine(tmp_path)
         self._seed(spine)
@@ -1234,6 +1231,7 @@ class TestVerifyBOMOffline:
 
         # Tamper with the head hash in the BOM
         import json
+
         tampered = json.loads(bom_bytes.decode())
         tampered["lineage_root_hash"] = "sha256:" + "a" * 64
         tampered_bytes = json.dumps(tampered).encode("utf-8")
@@ -1241,15 +1239,10 @@ class TestVerifyBOMOffline:
         report = verify_bom_offline(tampered_bytes, spine, b"k" * 32)
         assert report.ok is False
         assert any(
-            "lineage_root_hash mismatch" in e
-            and "BOM has" in e
-            and "spine head is" in e
-            for e in report.errors
+            "lineage_root_hash mismatch" in e and "BOM has" in e and "spine head is" in e for e in report.errors
         ), f"Expected error naming lineage_root_hash mismatch, got: {report.errors}"
 
-    def test_bom_verify_fails_closed_when_lineage_entry_tampered(
-        self, tmp_path: Path
-    ) -> None:
+    def test_bom_verify_fails_closed_when_lineage_entry_tampered(self, tmp_path: Path) -> None:
         """A valid hash whose lineage entry fails HMAC verification fails closed."""
         spine = self._spine(tmp_path)
         self._seed(spine)
@@ -1261,9 +1254,9 @@ class TestVerifyBOMOffline:
         # Use wrong HMAC key - the entry hash exists but verification fails
         report = verify_bom_offline(bom_bytes, spine, b"wrong" + b"k" * 31)
         assert report.ok is False
-        assert any(
-            "lineage entry failed verification" in e for e in report.errors
-        ), f"Expected error about lineage entry verification, got: {report.errors}"
+        assert any("lineage entry failed verification" in e for e in report.errors), (
+            f"Expected error about lineage entry verification, got: {report.errors}"
+        )
 
     def test_bom_verify_passes_for_valid_bom(self, tmp_path: Path) -> None:
         """A valid BOM against its originating spine passes all checks."""

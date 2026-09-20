@@ -526,9 +526,7 @@ class TestBOMEmitFromLineage:
 class TestBOMVerifyFromLineage:
     """Tests for offline BOM verification via CLI against the lineage spine."""
 
-    def test_verify_from_lineage_passes_for_valid_bom(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_from_lineage_passes_for_valid_bom(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A valid BOM verified against its originating spine passes."""
         _install_audit_key(tmp_path, monkeypatch)
         _seed_spine(tmp_path, "20260101-run-verify-1")
@@ -671,9 +669,7 @@ class TestBOMVerifyFromLineage:
         assert "BOM has" in verify.output
         assert "spine head is" in verify.output
 
-    def test_verify_from_lineage_requires_run(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_from_lineage_requires_run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """--from-lineage requires --run."""
         _install_audit_key(tmp_path, monkeypatch)
         _seed_spine(tmp_path, "20260101-run-verify-4")
@@ -708,9 +704,7 @@ class TestBOMVerifyFromLineage:
         assert verify.exit_code == 2, verify.output
         assert "requires --run" in verify.output
 
-    def test_verify_from_lineage_fails_without_audit_key(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_verify_from_lineage_fails_without_audit_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Offline verify fails closed without an audit key."""
         _install_audit_key(tmp_path, monkeypatch)
         _seed_spine(tmp_path, "20260101-run-verify-5")
