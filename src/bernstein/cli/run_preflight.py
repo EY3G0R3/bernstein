@@ -26,6 +26,7 @@ from bernstein.core.cost.model_prices import is_free_route, model_cost_is_known
 from bernstein.core.cost.preflight import CostBand, compute_band, format_band
 from bernstein.core.plan_loader import load_plan_from_yaml
 from bernstein.core.runtime_state import directory_size_bytes
+from bernstein.core.tasks.lifecycle import SUCCESSFUL_TASK_STATUSES, UNSUCCESSFUL_TERMINAL_STATUSES
 
 if TYPE_CHECKING:
     from rich.console import Console
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
     from bernstein.core.config.seed import SeedConfig
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_TASK_STATES = frozenset(status.value for status in SUCCESSFUL_TASK_STATUSES | UNSUCCESSFUL_TERMINAL_STATUSES)
 
 
 def validate_seed_or_exit(seed_file: str | None) -> SeedConfig | None:
@@ -701,7 +704,7 @@ class TaskStateProgressTracker:
 
     @staticmethod
     def format_line(task_id: str, state: str, adapter: str, model: str, title: str) -> str:
-        clean_title = title.replace("\n", " ").replace('"', "'").strip()[:60]
+        clean_title = " ".join(title.replace('"', "'").split())[:60]
         return f'task {task_id} {state} adapter={adapter} model={model} title="{clean_title}"'
 
     def update_tasks(self, tasks: list[dict[str, Any]]) -> list[str]:
@@ -716,15 +719,18 @@ class TaskStateProgressTracker:
             title = str(task.get("title") or "")
 
             if task_id not in self.seen_states:
-                planned_line = self.format_line(task_id, "planned", adapter, model, title)
-                lines.append(planned_line)
-                self.console.print(planned_line, soft_wrap=True)
-                self.seen_states[task_id] = "planned"
+                if current_state not in _TERMINAL_TASK_STATES:
+                    self.seen_states[task_id] = "planned"
+                    planned_line = self.format_line(task_id, "planned", adapter, model, title)
+                    lines.append(planned_line)
+                    self.console.print(planned_line, markup=False, highlight=False, soft_wrap=True)
+                else:
+                    self.seen_states[task_id] = current_state
 
             if current_state != self.seen_states[task_id]:
                 state_line = self.format_line(task_id, current_state, adapter, model, title)
                 lines.append(state_line)
-                self.console.print(state_line, soft_wrap=True)
+                self.console.print(state_line, markup=False, highlight=False, soft_wrap=True)
                 self.seen_states[task_id] = current_state
 
         return lines
