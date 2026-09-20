@@ -941,7 +941,7 @@ dev = [
 
 # Documentation toolchain (mkdocs.yml): MkDocs Material, the `social` card
 # plugin's imaging extra, and the `redirects` / `minify` plugins declared in
-# mkdocs.yml. Floors mirror site/requirements.in so `uv run --group docs
+# mkdocs.yml. Floors mirror docs/requirements.in so `uv run --group docs
 # mkdocs build --strict` resolves the same toolchain the docs pin file does.
 docs = [
     "mkdocs>=1.6.1,<2",
