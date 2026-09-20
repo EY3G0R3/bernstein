@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -10,11 +11,15 @@ import pytest
 from bernstein.core.view_mode import ViewMode, get_view_config
 from rich.console import Console
 
+from bernstein.cli.run_bootstrap import _await_first_spawn_outcome
 from bernstein.cli.run_preflight import (
     TaskStateProgressTracker,
     _finalize_run_output,
 )
 from bernstein.cli.status import _build_task_table, render_status
+from bernstein.core.routes.status_dashboard import _status_task_items
+from bernstein.core.server.server_app import task_to_response
+from bernstein.core.tasks.models import Task
 
 _NON_TTY_CAPS = MagicMock(supports_textual=False, is_tty=False)
 
@@ -59,6 +64,67 @@ def test_status_table_includes_adapter_and_model_columns() -> None:
     assert "claude-3-7-sonnet" in output
 
 
+def test_tracker_prints_markup_title_verbatim_without_killing_stream() -> None:
+    """A title with rich markup must print verbatim and not suppress later tasks."""
+    con = Console(record=True, force_terminal=True, width=160)
+    tracker = TaskStateProgressTracker(console=con)
+
+    tasks = [
+        {"id": "t-1", "title": "[/api/v1] roll the API", "status": "open", "adapter": "codex", "model": "o3"},
+        {"id": "t-2", "title": "Second task", "status": "open", "adapter": "codex", "model": "o3"},
+    ]
+    lines = tracker.update_tasks(tasks)
+
+    assert 'task t-1 planned adapter=codex model=o3 title="[/api/v1] roll the API"' in lines
+    assert any(line.startswith("task t-2 ") for line in lines)
+    assert "t-1" in tracker.seen_states
+    assert "t-2" in tracker.seen_states
+
+
+def test_tracker_emits_unknown_for_unrecorded_routing() -> None:
+    """Missing adapter/model must render as unknown, not fabricated defaults."""
+    con = Console(record=True, force_terminal=True, width=160)
+    tracker = TaskStateProgressTracker(console=con)
+
+    lines = tracker.update_tasks([{"id": "t-1", "title": "No routing", "status": "open"}])
+
+    assert 'task t-1 planned adapter=unknown model=unknown title="No routing"' in lines
+
+
+def test_tracker_does_not_emit_planned_for_terminal_first_state() -> None:
+    """A task already terminal at first observation must not claim it was planned this run."""
+    con = Console(record=True, force_terminal=True, width=160)
+    tracker = TaskStateProgressTracker(console=con)
+
+    lines = tracker.update_tasks([{"id": "t-1", "title": "Already done", "status": "done"}])
+
+    assert lines == []
+    assert tracker.seen_states["t-1"] == "done"
+
+
+def test_on_poll_hook_is_invoked_across_polls() -> None:
+    """The on_poll hook must fire on each poll until the first spawn is confirmed."""
+    calls: list[int] = []
+    agent_count = {"value": 0}
+
+    def stub(path: str) -> Any:
+        if path == "/health":
+            count = agent_count["value"]
+            agent_count["value"] += 1
+            return {"agent_count": count}
+        return {"tasks": [], "total": 0, "limit": 50, "offset": 0}
+
+    with patch("bernstein.cli.run_bootstrap.server_get", side_effect=stub):
+        outcome, _reason = _await_first_spawn_outcome(
+            timeout_s=5.0,
+            poll_interval_s=0.01,
+            on_poll=lambda: calls.append(1),
+        )
+
+    assert outcome == "spawned"
+    assert len(calls) >= 2
+
+
 def test_status_render_recorded_runtime_state_has_adapter_column() -> None:
     """bernstein status output on recorded runtime state includes an Adapter column."""
     recorded_runtime_payload = {
@@ -98,6 +164,52 @@ def test_status_render_recorded_runtime_state_has_adapter_column() -> None:
     assert "Model" in output
     assert "codex" in output
     assert "opencode" in output
+
+
+def test_status_without_tty_renders_plain_summary_not_table() -> None:
+    """Non-TTY status output uses the plain summary; the table is TTY-only."""
+    recorded_runtime_payload = {
+        "summary": {"total": 2, "done": 1, "open": 1, "failed": 0, "claimed": 0},
+        "tasks": {
+            "count": 2,
+            "items": [
+                {"id": "task-alpha", "title": "Implement auth", "role": "backend", "status": "done", "priority": 1},
+                {"id": "task-beta", "title": "Audit policies", "role": "security", "status": "open", "priority": 1},
+            ],
+        },
+        "agents": {"count": 0, "items": []},
+        "costs": {"spent_usd": 0.42},
+    }
+
+    console = Console(record=True, force_terminal=False, width=140)
+    render_status(recorded_runtime_payload, console=console, view_config=get_view_config(ViewMode.STANDARD))
+    output = console.export_text()
+
+    assert "Total tasks: 2" in output
+    assert "Adapter" not in output
+
+
+def test_status_items_report_unset_routing_as_empty_not_fabricated() -> None:
+    """A real Task with no recorded routing must surface empty fields, not defaults."""
+    task = Task(id="t-1", title="No routing", description="Write it.", role="backend", batch_eligible=False)
+
+    rows = _status_task_items([task], now=time.time())
+
+    assert rows[0]["adapter"] == ""
+    assert rows[0]["cli"] == ""
+    assert rows[0]["model"] == ""
+
+
+def test_tracker_reports_unknown_through_real_task_response_path() -> None:
+    """The /tasks payload for a Task with no recorded routing must render as unknown."""
+    task = Task(id="t-1", title="No routing", description="Write it.", role="backend", batch_eligible=False)
+    payload = task_to_response(task).model_dump()
+
+    con = Console(record=True, force_terminal=True, width=160)
+    tracker = TaskStateProgressTracker(console=con)
+    lines = tracker.update_tasks([payload])
+
+    assert 'task t-1 planned adapter=unknown model=unknown title="No routing"' in lines
 
 
 def test_task_state_progress_tracker_format_and_no_paths_or_timestamps() -> None:
