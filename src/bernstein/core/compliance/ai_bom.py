@@ -39,8 +39,10 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+from bernstein.core.lineage.spine import verify_entry
+
 if TYPE_CHECKING:
-    from bernstein.core.lineage.spine import LineageSpine
+    from bernstein.core.lineage.spine import LineageSpine, SpineEntry
 
 __all__ = [
     "AIBOM",
@@ -58,6 +60,7 @@ __all__ = [
     "generate_bom",
     "snapshot_from_spine",
     "verify_bom",
+    "verify_bom_offline",
 ]
 
 
@@ -462,6 +465,89 @@ def verify_bom(payload: object) -> BOMVerificationReport:
             if last_key is not None and cur_key < last_key:
                 errors.append(f"{key}[{index}] breaks deterministic ordering")
             last_key = cur_key
+
+    ok = not errors
+    return BOMVerificationReport(ok=ok, errors=tuple(errors), checked_count=checked)
+
+
+# ---------------------------------------------------------------------------
+# Offline verification against the lineage spine
+# ---------------------------------------------------------------------------
+
+
+def verify_bom_offline(
+    payload: object,
+    spine: LineageSpine,
+    hmac_key: bytes,
+) -> BOMVerificationReport:
+    """Verify a BOM document against the run's lineage spine (offline).
+
+    This re-derives the BOM projection from the spine and checks that every
+    listed component's hash resolves to a verifying lineage record and that
+    the head anchor matches. Fails closed: any mismatch is reported with the
+    specific line item that failed.
+
+    Checks performed (in addition to :func:`verify_bom` structural checks):
+
+    1. Parse the BOM and run structural verification first.
+    2. The ``lineage_root_hash`` in the BOM matches ``spine.head_hash()``.
+    3. Every ``ModelEntry.sha256`` resolves to an ``entry_hash`` yielded by
+       ``spine.iter_entries()`` AND that entry verifies via
+       ``verify_entry(entry, hmac_key)``.
+    4. (Future) ``PromptEntry``, ``AdapterEntry``, ``ToolEntry``,
+       ``DataSourceEntry`` hashes resolve to verifying lineage records when
+       the spine carries those component types.
+
+    Args:
+        payload: The BOM document (bytes, str, or Mapping).
+        spine: The run's :class:`~bernstein.core.lineage.spine.LineageSpine`.
+        hmac_key: The HMAC key the lineage chain was written under.
+
+    Returns:
+        :class:`BOMVerificationReport` with ``ok=True`` only when all
+        offline checks pass. Errors name the specific line item that failed.
+    """
+    # First run structural verification
+    struct_report = verify_bom(payload)
+    if not struct_report.ok:
+        return struct_report
+
+    doc = _coerce_payload(payload)
+    errors: list[str] = []
+    checked = struct_report.checked_count
+
+    # Build a map of entry_hash -> SpineEntry for O(1) lookups
+    entry_map: dict[str, SpineEntry] = {}
+    for entry in spine.iter_entries():
+        entry_map[entry.entry_hash] = entry
+
+    # Check lineage_root_hash matches spine head
+    bom_root_hash = doc.get("lineage_root_hash")
+    spine_head_hash = spine.head_hash()
+    if bom_root_hash != spine_head_hash:
+        errors.append(f"lineage_root_hash mismatch: BOM has {bom_root_hash!r}, spine head is {spine_head_hash!r}")
+
+    # Check each model entry's sha256 resolves to a verifying spine entry
+    models_raw = doc.get("models", [])
+    for index, item in enumerate(models_raw):
+        checked += 1
+        if not isinstance(item, dict):
+            continue
+        item_d: dict[str, Any] = cast("dict[str, Any]", item)
+        sha: str | None = item_d.get("sha256")
+        if not isinstance(sha, str) or not _SHA256_RE.match(sha):
+            continue
+        # sha is str here due to the isinstance check above
+        entry = entry_map.get(sha)
+        if entry is None:
+            errors.append(f"models[{index}].sha256 {sha!r}: not found in lineage spine")
+        else:
+            # Verify the entry's HMAC and hash chain
+            if not verify_entry(entry, hmac_key):
+                errors.append(f"models[{index}].sha256 {sha!r}: lineage entry failed verification")
+
+    # Note: prompts, adapters, tools, data_sources are not yet tracked
+    # in the lineage spine. When they are, add similar checks here.
 
     ok = not errors
     return BOMVerificationReport(ok=ok, errors=tuple(errors), checked_count=checked)

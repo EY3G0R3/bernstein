@@ -200,12 +200,60 @@ def _write_bom(snapshot: dict[str, Any], *, fmt: str, out_path: str | None) -> N
     default=False,
     help="Only emit exit code; suppress the verification report.",
 )
-def verify_cmd(bom_path: str, quiet: bool) -> None:
-    """Verify a previously emitted AI-BOM."""
-    from bernstein.core.compliance.ai_bom import verify_bom
+@click.option(
+    "--from-lineage",
+    "from_lineage",
+    is_flag=True,
+    default=False,
+    help="Verify offline by re-deriving the BOM from .sdd/lineage/<run>/.",
+)
+@click.option(
+    "--run",
+    "run_id",
+    default=None,
+    help="Bernstein run identifier (required with --from-lineage).",
+)
+@click.option(
+    "--workdir",
+    default=".",
+    show_default=True,
+    help="Project root (used to resolve .sdd/lineage when --from-lineage is given).",
+)
+def verify_cmd(bom_path: str, quiet: bool, from_lineage: bool, run_id: str | None, workdir: str) -> None:
+    """Verify a previously emitted AI-BOM.
+
+    With --from-lineage, performs offline verification by re-deriving the
+    projection from the run's lineage spine and checking that every
+    component hash resolves to a verifying lineage record and the head
+    anchor matches.
+    """
+    from bernstein.core.compliance.ai_bom import verify_bom, verify_bom_offline
+    from bernstein.core.lineage.spine import LineageSpine, SpineRunIdError
+    from bernstein.core.security.audit import (
+        AuditKeyMissingError,
+        AuditKeyPermissionError,
+        load_audit_key,
+    )
 
     raw = Path(bom_path).read_bytes()
-    report = verify_bom(raw)
+
+    if from_lineage:
+        if not run_id:
+            click.echo("error: --from-lineage requires --run", err=True)
+            raise SystemExit(2)
+        try:
+            hmac_key = load_audit_key()
+        except (AuditKeyMissingError, AuditKeyPermissionError) as exc:
+            click.echo(f"error: cannot read the audit key the lineage chain was written under: {exc}", err=True)
+            raise SystemExit(1) from None
+        try:
+            spine = LineageSpine(Path(workdir).resolve() / ".sdd" / "lineage", run_id=run_id, hmac_key=hmac_key)
+        except SpineRunIdError as exc:
+            click.echo(f"error: invalid run id: {exc}", err=True)
+            raise SystemExit(1) from None
+        report = verify_bom_offline(raw, spine, hmac_key)
+    else:
+        report = verify_bom(raw)
 
     if quiet:
         raise SystemExit(0 if report.ok else 1)

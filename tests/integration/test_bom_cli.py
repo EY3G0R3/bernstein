@@ -516,3 +516,237 @@ class TestBOMEmitFromLineage:
 
         assert result.exit_code == 1
         assert "invalid run id" in result.output
+
+
+# ---------------------------------------------------------------------------
+# 3. ``bom verify --from-lineage`` offline verification
+# ---------------------------------------------------------------------------
+
+
+class TestBOMVerifyFromLineage:
+    """Tests for offline BOM verification via CLI against the lineage spine."""
+
+    def test_verify_from_lineage_passes_for_valid_bom(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid BOM verified against its originating spine passes."""
+        _install_audit_key(tmp_path, monkeypatch)
+        _seed_spine(tmp_path, "20260101-run-verify-1")
+
+        # First emit the BOM from lineage
+        out_path = tmp_path / "bom.json"
+        emit = CliRunner().invoke(
+            bom_group,
+            [
+                "emit",
+                "--run",
+                "20260101-run-verify-1",
+                "--from-lineage",
+                "--workdir",
+                str(tmp_path),
+                "--out",
+                str(out_path),
+            ],
+        )
+        assert emit.exit_code == 0, emit.output
+
+        # Now verify it offline
+        verify = CliRunner().invoke(
+            bom_group,
+            [
+                "verify",
+                str(out_path),
+                "--from-lineage",
+                "--run",
+                "20260101-run-verify-1",
+                "--workdir",
+                str(tmp_path),
+            ],
+        )
+        assert verify.exit_code == 0, verify.output
+        assert "PASS" in verify.output
+
+    def test_verify_from_lineage_fails_when_model_hash_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A BOM with a model hash not in the spine fails with the named line item."""
+        _install_audit_key(tmp_path, monkeypatch)
+        _seed_spine(tmp_path, "20260101-run-verify-2")
+
+        # Emit valid BOM
+        out_path = tmp_path / "bom.json"
+        emit = CliRunner().invoke(
+            bom_group,
+            [
+                "emit",
+                "--run",
+                "20260101-run-verify-2",
+                "--from-lineage",
+                "--workdir",
+                str(tmp_path),
+                "--out",
+                str(out_path),
+            ],
+        )
+        assert emit.exit_code == 0, emit.output
+
+        # Tamper with the BOM - change model hash
+        import hashlib
+        import json
+
+        def _sha(label: str) -> str:
+            return "sha256:" + hashlib.sha256(label.encode()).hexdigest()
+
+        tampered = json.loads(out_path.read_text())
+        tampered["models"][0]["sha256"] = _sha("fake-model")
+        out_path.write_text(json.dumps(tampered))
+
+        # Verify should fail with the specific line item
+        verify = CliRunner().invoke(
+            bom_group,
+            [
+                "verify",
+                str(out_path),
+                "--from-lineage",
+                "--run",
+                "20260101-run-verify-2",
+                "--workdir",
+                str(tmp_path),
+            ],
+        )
+        assert verify.exit_code == 1, verify.output
+        assert "FAIL" in verify.output
+        assert "models[0].sha256" in verify.output
+        assert "not found in lineage spine" in verify.output
+
+    def test_verify_from_lineage_fails_when_head_anchor_mismatches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A BOM with a mismatched lineage_root_hash fails with the mismatch details."""
+        _install_audit_key(tmp_path, monkeypatch)
+        _seed_spine(tmp_path, "20260101-run-verify-3")
+
+        out_path = tmp_path / "bom.json"
+        emit = CliRunner().invoke(
+            bom_group,
+            [
+                "emit",
+                "--run",
+                "20260101-run-verify-3",
+                "--from-lineage",
+                "--workdir",
+                str(tmp_path),
+                "--out",
+                str(out_path),
+            ],
+        )
+        assert emit.exit_code == 0, emit.output
+
+        # Tamper with head hash
+        import hashlib
+        import json
+
+        def _sha(label: str) -> str:
+            return "sha256:" + hashlib.sha256(label.encode()).hexdigest()
+
+        tampered = json.loads(out_path.read_text())
+        tampered["lineage_root_hash"] = _sha("fake-head")
+        out_path.write_text(json.dumps(tampered))
+
+        verify = CliRunner().invoke(
+            bom_group,
+            [
+                "verify",
+                str(out_path),
+                "--from-lineage",
+                "--run",
+                "20260101-run-verify-3",
+                "--workdir",
+                str(tmp_path),
+            ],
+        )
+        assert verify.exit_code == 1, verify.output
+        assert "FAIL" in verify.output
+        assert "lineage_root_hash mismatch" in verify.output
+        assert "BOM has" in verify.output
+        assert "spine head is" in verify.output
+
+    def test_verify_from_lineage_requires_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--from-lineage requires --run."""
+        _install_audit_key(tmp_path, monkeypatch)
+        _seed_spine(tmp_path, "20260101-run-verify-4")
+
+        out_path = tmp_path / "bom.json"
+        emit = CliRunner().invoke(
+            bom_group,
+            [
+                "emit",
+                "--run",
+                "20260101-run-verify-4",
+                "--from-lineage",
+                "--workdir",
+                str(tmp_path),
+                "--out",
+                str(out_path),
+            ],
+        )
+        assert emit.exit_code == 0, emit.output
+
+        # Verify without --run should fail
+        verify = CliRunner().invoke(
+            bom_group,
+            [
+                "verify",
+                str(out_path),
+                "--from-lineage",
+                "--workdir",
+                str(tmp_path),
+            ],
+        )
+        assert verify.exit_code == 2, verify.output
+        assert "requires --run" in verify.output
+
+    def test_verify_from_lineage_fails_without_audit_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Offline verify fails closed without an audit key."""
+        _install_audit_key(tmp_path, monkeypatch)
+        _seed_spine(tmp_path, "20260101-run-verify-5")
+
+        out_path = tmp_path / "bom.json"
+        emit = CliRunner().invoke(
+            bom_group,
+            [
+                "emit",
+                "--run",
+                "20260101-run-verify-5",
+                "--from-lineage",
+                "--workdir",
+                str(tmp_path),
+                "--out",
+                str(out_path),
+            ],
+        )
+        assert emit.exit_code == 0, emit.output
+
+        # Now unset the audit key for verify
+        monkeypatch.delenv("BERNSTEIN_AUDIT_KEY_PATH", raising=False)
+        key_file = tmp_path / "absent.key"
+        monkeypatch.setenv("BERNSTEIN_AUDIT_KEY_PATH", str(key_file))
+
+        verify = CliRunner().invoke(
+            bom_group,
+            [
+                "verify",
+                str(out_path),
+                "--from-lineage",
+                "--run",
+                "20260101-run-verify-5",
+                "--workdir",
+                str(tmp_path),
+            ],
+        )
+        assert verify.exit_code != 0, verify.output
+        assert "audit key" in verify.output.lower()
