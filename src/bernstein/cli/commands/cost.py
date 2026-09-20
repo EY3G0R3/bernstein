@@ -1942,4 +1942,5 @@ __all__ = [
     "cost_profile_report_cmd",
     "estimate_alias_cmd",
     "estimate_cmd",
+    "model_call_group",
 ]
