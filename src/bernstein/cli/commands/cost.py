@@ -1909,9 +1909,6 @@ estimate_alias_cmd = click.Command(
 )
 
 
-cost_cmd.add_command(cost_envelopes_group, "envelopes")
-
-
 @click.group("cost-envelopes")
 @click.pass_context
 def cost_envelopes_alias_cmd(ctx: click.Context) -> None:
