@@ -10,9 +10,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SRC_BERNSTEIN = _REPO_ROOT / "src" / "bernstein"
 _PROTOCOL_FILE = "src/bernstein/core/receipts/protocol.py"
+
+pytestmark = pytest.mark.whole_tree_guard
 
 
 def _definition_sites(name: str) -> list[tuple[str, int]]:
