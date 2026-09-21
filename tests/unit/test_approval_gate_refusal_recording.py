@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from bernstein.core.models import Task, TaskStatus, TaskType, Complexity, Scope
+from bernstein.core.models import Complexity, Scope, Task, TaskStatus, TaskType
 
 
 def _make_task(*, id: str = "T-001", title: str = "Add auth") -> Task:
@@ -28,7 +26,6 @@ def test_approval_gate_records_refusal_on_timeout(tmp_path: Path) -> None:
     """Review mode records a chain-anchored refusal when approval times out."""
     from bernstein.core.approval import ApprovalGate, ApprovalMode
     from bernstein.core.identity.grants import GrantLedger
-    from bernstein.core.security.audit import load_or_create_audit_key
 
     # Mock the poll decision to return "timed_out" immediately
     gate = ApprovalGate(
@@ -62,7 +59,6 @@ def test_approval_gate_records_refusal_on_explicit_rejection(tmp_path: Path) -> 
     """Review mode records a chain-anchored refusal when explicitly rejected."""
     from bernstein.core.approval import ApprovalGate, ApprovalMode
     from bernstein.core.identity.grants import GrantLedger
-    from bernstein.core.security.audit import load_or_create_audit_key
 
     # Mock the poll decision to return "rejected"
     gate = ApprovalGate(
@@ -122,7 +118,6 @@ def test_approval_gate_records_refusal_on_timeout_with_approve_on_timeout(tmp_pa
     """Review mode with approve_on_timeout still records a refusal even when resolving to approved."""
     from bernstein.core.approval import ApprovalGate, ApprovalMode
     from bernstein.core.identity.grants import GrantLedger
-    from bernstein.core.security.audit import load_or_create_audit_key
 
     # Mock the poll decision to return "timed_out"
     gate = ApprovalGate(
@@ -138,8 +133,8 @@ def test_approval_gate_records_refusal_on_timeout_with_approve_on_timeout(tmp_pa
 
     with patch("bernstein.core.security.approval.GrantLedger", return_value=mock_ledger):
         result = gate.evaluate(
-            task, 
-            session_id="agent-timeout-approve", 
+            task,
+            session_id="agent-timeout-approve",
             timeout_s=0.1,
             approve_on_timeout=True  # This should still record a refusal
         )
