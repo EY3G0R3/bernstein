@@ -495,5 +495,5 @@ __all__ = [
     "ReceiptVerificationResult",
     "export_receipt",
     "open_receipt",
-    "verify_receipt",
+    "verify_receipt_tarball",
 ]

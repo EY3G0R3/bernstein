@@ -557,7 +557,7 @@ __all__ = [
     "receipt_from_dict",
     "receipt_path",
     "receipt_to_dict",
-    "sign_receipt",
-    "verify_receipt",
+    "sign_sla_receipt",
+    "verify_sla_receipt",
     "write_receipt",
 ]

@@ -50,7 +50,7 @@ __all__ = [
     "load_receipt",
     "receipt_artefact_path",
     "receipts_dir",
-    "verify_receipt",
+    "verify_transaction_receipt",
 ]
 
 #: Receipt schema version.

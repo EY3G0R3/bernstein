@@ -76,8 +76,8 @@ __all__ = [
     "receipt_from_dict",
     "receipt_to_dict",
     "recommend_action",
-    "sign_receipt",
-    "verify_receipt",
+    "sign_supervisor_receipt",
+    "verify_supervisor_receipt",
 ]
 
 

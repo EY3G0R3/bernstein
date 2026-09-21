@@ -690,9 +690,9 @@ __all__ = [
     "read_receipt_file",
     "receipt_from_dict",
     "receipt_to_dict",
-    "sign_receipt",
+    "sign_selection_receipt",
     "snapshot_digests",
-    "verify_receipt",
     "verify_receipt_full",
+    "verify_selection_receipt",
     "write_receipt",
 ]
