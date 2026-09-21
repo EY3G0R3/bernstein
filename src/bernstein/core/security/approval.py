@@ -541,7 +541,7 @@ class ApprovalGate:
                 reason="approval_timeout",
                 detail=f"Approval gate timed out after {timeout_s or _DEFAULT_MAX_WAIT_S:.0f}s with no decision",
             )
-            
+
             if approve_on_timeout:
                 logger.warning(
                     "Approval gate: task %s expired with no decision - resolving to approved "
@@ -574,11 +574,11 @@ class ApprovalGate:
         detail: str,
     ) -> None:
         """Record an approval refusal as a chain-anchored event.
-        
+
         This ensures that refusals (whether from timeout or explicit rejection)
         are recorded in the tamper-evident audit chain, making them independently
         verifiable rather than just an in-process callback.
-        
+
         Args:
             task_id: The task that was refused
             session_id: The agent session that produced the work
@@ -588,7 +588,7 @@ class ApprovalGate:
         try:
             # Use a deterministic run_id based on the task for the grant ledger
             run_id = f"approval-{task_id}"
-            
+
             # Get or create the grant ledger with install-anchored signer
             signer = install_grant_signer(issuer="approval-gate")
             ledger = GrantLedger(
@@ -596,7 +596,7 @@ class ApprovalGate:
                 key=load_or_create_audit_key(),
                 signer=signer,
             )
-            
+
             # Record the refusal - we use the grant_refused kind since it's
             # the appropriate chain-anchored refusal record
             ledger.record_refusal(
