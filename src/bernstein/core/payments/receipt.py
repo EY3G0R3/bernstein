@@ -343,7 +343,7 @@ def _find_lineage_entry(store: LineageStore, receipt: TransactionReceipt) -> tup
     return None
 
 
-def verify_receipt(
+def verify_transaction_receipt(
     *,
     workdir: Path,
     hmac_key: bytes,

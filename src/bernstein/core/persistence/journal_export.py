@@ -386,7 +386,7 @@ def _walk_journal_bytes(payload: bytes) -> tuple[str, int, list[str]]:
     return head_hash, steps, errors
 
 
-def verify_receipt(
+def verify_receipt_tarball(
     receipt_path: Path,
     *,
     expected_head: str | None = None,
