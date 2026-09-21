@@ -8,6 +8,7 @@ import shutil
 import signal
 import socket
 from pathlib import Path
+from unittest.mock import patch
 
 from bernstein.core.orchestration.bootstrap import BootstrapResult, bootstrap_from_goal, bootstrap_from_seed
 
@@ -49,35 +50,37 @@ quality_gates:
     port1 = get_free_port()
     port2 = get_free_port()
 
-    # Run without inline goal (from seed file)
-    result_from_seed = None
-    try:
-        result_from_seed = bootstrap_from_seed(seed_yaml, workdir=tmp_path, port=port1)
-        seed_from_seed = result_from_seed.seed
-    finally:
-        _kill_bernstein_processes(result_from_seed)
-        # Clean up .sdd to remove PID file and reset state for second run
-        sdd_dir = tmp_path / ".sdd"
-        if sdd_dir.exists():
-            shutil.rmtree(sdd_dir)
+    # Mock preflight_checks to skip binary existence check (claude not required for test)
+    with patch("bernstein.core.orchestration.bootstrap.preflight_checks"):
+        # Run without inline goal (from seed file)
+        result_from_seed = None
+        try:
+            result_from_seed = bootstrap_from_seed(seed_yaml, workdir=tmp_path, port=port1)
+            seed_from_seed = result_from_seed.seed
+        finally:
+            _kill_bernstein_processes(result_from_seed)
+            # Clean up .sdd to remove PID file and reset state for second run
+            sdd_dir = tmp_path / ".sdd"
+            if sdd_dir.exists():
+                shutil.rmtree(sdd_dir)
 
-    # Run with inline goal (same goal as in the yaml)
-    result_from_goal = None
-    try:
-        result_from_goal = bootstrap_from_goal(
-            goal="test",
-            workdir=tmp_path,
-            cli="claude",
-            model=None,
-            port=port2,
-        )
-        seed_from_goal = result_from_goal.seed
-    finally:
-        _kill_bernstein_processes(result_from_goal)
-        # Clean up .sdd after second run (not strictly necessary for test, but good practice)
-        sdd_dir = tmp_path / ".sdd"
-        if sdd_dir.exists():
-            shutil.rmtree(sdd_dir)
+        # Run with inline goal (same goal as in the yaml)
+        result_from_goal = None
+        try:
+            result_from_goal = bootstrap_from_goal(
+                goal="test",
+                workdir=tmp_path,
+                cli="claude",
+                model=None,
+                port=port2,
+            )
+            seed_from_goal = result_from_goal.seed
+        finally:
+            _kill_bernstein_processes(result_from_goal)
+            # Clean up .sdd after second run (not strictly necessary for test, but good practice)
+            sdd_dir = tmp_path / ".sdd"
+            if sdd_dir.exists():
+                shutil.rmtree(sdd_dir)
 
     # They should have the same quality_gates
     assert seed_from_seed.quality_gates == seed_from_goal.quality_gates
@@ -101,20 +104,21 @@ quality_gates:
 
     port = get_free_port()
     result = None
-    try:
-        result = bootstrap_from_goal(
-            goal="trace test",
-            workdir=tmp_path,
-            cli="claude",
-            model=None,
-            port=port,
-        )
-    finally:
-        _kill_bernstein_processes(result)
-        # Clean up .sdd
-        sdd_dir = tmp_path / ".sdd"
-        if sdd_dir.exists():
-            shutil.rmtree(sdd_dir)
+    with patch("bernstein.core.orchestration.bootstrap.preflight_checks"):
+        try:
+            result = bootstrap_from_goal(
+                goal="trace test",
+                workdir=tmp_path,
+                cli="claude",
+                model=None,
+                port=port,
+            )
+        finally:
+            _kill_bernstein_processes(result)
+            # Clean up .sdd
+            sdd_dir = tmp_path / ".sdd"
+            if sdd_dir.exists():
+                shutil.rmtree(sdd_dir)
 
     # The BootstrapResult must contain a seed (used for tracing)
     assert result.seed is not None
