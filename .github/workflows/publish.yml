@@ -49,7 +49,8 @@ permissions: {}
 # name, the npm version, and the ref every job checks out.
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-  CHECKOUT_REF: ${{ github.event_name == "workflow_dispatch" && (inputs.ref != "" && inputs.ref || inputs.tag) || github.ref }}
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref != ''
+    && inputs.ref || inputs.tag) || github.ref }}
 
 jobs:
   # Protocol compatibility gate - blocks release if breaking changes found
