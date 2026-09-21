@@ -53,6 +53,7 @@ from bernstein.core.routes.identities import identity_store_for_request
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from pathlib import Path
 
 router = APIRouter(tags=["scim"])
 
@@ -456,6 +457,7 @@ def _principal_ledger_for_request(request: Request) -> Any:
     from (but parallel to) the agent identity store used for reads.
     """
     from bernstein.core.identity.principals import default_principal_ledger
+    from pathlib import Path
 
     ledger = getattr(request.app.state, "principal_ledger", None)
     if ledger is None:

@@ -57,6 +57,7 @@ _ALLOWED_IMPORT_ROOTS = frozenset(
         "datetime",
         "fastapi",
         "typing",
+        "pathlib",
     }
 )
 
