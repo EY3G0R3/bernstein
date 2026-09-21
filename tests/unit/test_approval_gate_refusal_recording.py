@@ -136,7 +136,7 @@ def test_approval_gate_records_refusal_on_timeout_with_approve_on_timeout(tmp_pa
             task,
             session_id="agent-timeout-approve",
             timeout_s=0.1,
-            approve_on_timeout=True  # This should still record a refusal
+            approve_on_timeout=True,  # This should still record a refusal
         )
 
     # Should resolve to approved despite timeout
