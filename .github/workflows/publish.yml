@@ -1,57 +1,149 @@
 name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual re-publish path: dispatch on the default branch with the tag to
+  # publish. Used when an auto-release tag push did not start this workflow
+  # (a tag pushed with GITHUB_TOKEN does not always trigger downstream runs).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v2.8.1)"
+        required: true
+        type: string
+      # Republish a single distribution channel for a tag that is already
+      # released. The RPM channel builds from packaging/rpm/bernstein.spec
+      # rather than from dist/, so it can be replayed on its own without
+      # rebuilding or re-uploading anything else.
+      copr_only:
+        description: "Run only the Copr RPM publish for the given tag"
+        required: false
+        default: false
+        type: boolean
+      # Same idea as copr_only, for the other channel most likely to need a
+      # solo replay: the registry listing depends on the Docker image that
+      # publish-docker.yml builds, so it is the one publish step most likely
+      # to still be missing after the other three channels have already gone
+      # out. Replaying the full graph in that case would re-upload release
+      # assets and resubmit the RPM build instead of just retrying the
+      # listing.
+      registry_only:
+        description: "Run only the MCP registry publish for the given tag"
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: "Git ref to checkout (branch, tag, or commit). Defaults to the tag to publish."
+        required: false
+        type: string
+
+# Permissions are declared per-job so that each job gets only what it
+# needs (Sonar S8264). The default permission for any job that does not
+# declare ``permissions:`` is an empty set.
 permissions: {}
+
+# Resolved release tag: the dispatch input when run manually, else the tag
+# that triggered the push. Drives the version checks, the GitHub Release
+# name, the npm version, and the ref every job checks out.
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-  CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref != ''
-    && inputs.ref || inputs.tag) || github.ref }}
+  CHECKOUT_REF: ${{ github.event_name == "workflow_dispatch" && (inputs.ref != "" && inputs.ref || inputs.tag) || github.ref }}
+
 jobs:
+  # Protocol compatibility gate - blocks release if breaking changes found
   protocol-gate:
     name: Protocol Compatibility Gate
     runs-on: ubuntu-latest
+    # A single-channel republish re-releases nothing, so the release gates
+    # have nothing to gate. Skipping the three root jobs skips the whole
+    # build/publish graph with them - every other job reaches it via `needs`.
     if: ${{ !inputs.copr_only && !inputs.registry_only }}
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ env.CHECKOUT_REF }}
-        persist-credentials: false
-    - uses: ./.github/actions/bootstrap
-      with:
-        enable-uv-cache: 'false'
-    - name: Run protocol compatibility check
-      env:
-        RELEASE_REF: ${{ env.RELEASE_TAG }}
-      run: "set -euo pipefail\n\n# Run protocol tests with protocol packages injected\
-        \ by uv.\n# Bare uv package installation fails on tag runners before\n# the\
-        \ first `uv run` creates the project environment.\nset +e\nuv run --with mcp\
-        \ --with a2a pytest tests/protocol/ -v 2>&1 | tee test-output.log\npytest_exit_code=${PIPESTATUS[0]}\n\
-        set -e\n\n# Generate results\nPYTEST_EXIT_CODE=\"$pytest_exit_code\" python\
-        \ << 'EOF'\nimport json\nimport os\n\nresults = []\npytest_exit_code = int(os.environ[\"\
-        PYTEST_EXIT_CODE\"])\nstatus = \"pass\" if pytest_exit_code == 0 else \"fail\"\
-        \n\nresult = {\n  \"python\": \"3.12\",\n  \"mcp\": \"1.0\",\n  \"a2a\": \"\
-        0.2\",\n  \"status\": status\n}\nresults.append(result)\n\ncompat_data = {\n\
-        \  \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\n  \"release\": os.environ.get(\"\
-        RELEASE_REF\", \"\"),\n  \"results\": results\n}\n\nwith open('release-compat-results.json',\
-        \ 'w') as f:\n    json.dump(compat_data, f, indent=2)\nEOF\n\nexit \"$pytest_exit_code\"\
-        \n"
-    - name: Check against baseline
-      run: "python scripts/check_compatibility.py \\\n  --current-results release-compat-results.json\
-        \ \\\n  --baseline tests/protocol/compatibility-baseline.json 2>&1 | tee gate-check.log\n"
-    - name: Gate decision
-      env:
-        COMMIT_MSG: ${{ github.event.head_commit.message }}
-      run: "if grep -q \"ACKNOWLEDGE_BREAKING_CHANGES\" <<< \"$COMMIT_MSG\"; then\n\
-        \  echo \"\u2705 Operator acknowledged breaking changes\"\n  exit 0\nfi\n\n\
-        if grep -q '\"breaking_changes\": \\[\\]' gate-check.log; then\n  echo \"\u2705\
-        \ Gate passed - no breaking changes detected\"\n  exit 0\nelse\n  echo \"\u274C\
-        \ Release blocked - breaking changes detected\"\n  echo \"To proceed: include\
-        \ 'ACKNOWLEDGE_BREAKING_CHANGES' in commit message\"\n  exit 1\nfi\n"
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+      - uses: ./.github/actions/bootstrap
+        with:
+          enable-uv-cache: "false"
+
+      - name: Run protocol compatibility check
+        env:
+          RELEASE_REF: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+
+          # Run protocol tests with protocol packages injected by uv.
+          # Bare uv package installation fails on tag runners before
+          # the first `uv run` creates the project environment.
+          set +e
+          uv run --with mcp --with a2a pytest tests/protocol/ -v 2>&1 | tee test-output.log
+          pytest_exit_code=${PIPESTATUS[0]}
+          set -e
+
+          # Generate results
+          PYTEST_EXIT_CODE="$pytest_exit_code" python << 'EOF'
+          import json
+          import os
+
+          results = []
+          pytest_exit_code = int(os.environ["PYTEST_EXIT_CODE"])
+          status = "pass" if pytest_exit_code == 0 else "fail"
+
+          result = {
+            "python": "3.12",
+            "mcp": "1.0",
+            "a2a": "0.2",
+            "status": status
+          }
+          results.append(result)
+
+          compat_data = {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "release": os.environ.get("RELEASE_REF", ""),
+            "results": results
+          }
+
+          with open('release-compat-results.json', 'w') as f:
+              json.dump(compat_data, f, indent=2)
+          EOF
+
+          exit "$pytest_exit_code"
+
+      - name: Check against baseline
+        run: |
+          python scripts/check_compatibility.py \
+            --current-results release-compat-results.json \
+            --baseline tests/protocol/compatibility-baseline.json 2>&1 | tee gate-check.log
+
+      - name: Gate decision
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if grep -q "ACKNOWLEDGE_BREAKING_CHANGES" <<< "$COMMIT_MSG"; then
+            echo "✅ Operator acknowledged breaking changes"
+            exit 0
+          fi
+
+          if grep -q '"breaking_changes": \[\]' gate-check.log; then
+            echo "✅ Gate passed - no breaking changes detected"
+            exit 0
+          else
+            echo "❌ Release blocked - breaking changes detected"
+            echo "To proceed: include 'ACKNOWLEDGE_BREAKING_CHANGES' in commit message"
+            exit 1
+          fi
+
+  # Safety: run tests before publishing even on manual tag push
   test:
     name: Verify tests pass
     runs-on: ubuntu-latest
@@ -60,21 +152,22 @@ jobs:
     permissions:
       contents: read
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ env.CHECKOUT_REF }}
-        persist-credentials: false
-    - uses: ./.github/actions/bootstrap
-      with:
-        enable-uv-cache: 'false'
-    - name: Quick lint check (full tests already passed in CI)
-      run: uv run ruff check src/
-    - name: Release test guard
-      run: uv run python scripts/run_tests.py -k release -x
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+      - uses: ./.github/actions/bootstrap
+        with:
+          enable-uv-cache: "false"
+      - name: Quick lint check (full tests already passed in CI)
+        run: uv run ruff check src/
+      - name: Release test guard
+        run: uv run python scripts/run_tests.py -k release -x
+
   version-check:
     name: Verify tag matches pyproject.toml
     runs-on: ubuntu-latest
@@ -83,47 +176,50 @@ jobs:
     permissions:
       contents: read
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ env.CHECKOUT_REF }}
-        persist-credentials: false
-    - name: Compare tag to pyproject.toml version
-      run: "TAG=\"${RELEASE_TAG#v}\"\nPKG=$(grep '^version = ' pyproject.toml | head\
-        \ -1 | sed 's/version = \"\\(.*\\)\"/\\1/')\necho \"Tag version:    $TAG\"\
-        \necho \"Package version: $PKG\"\nif [ \"$TAG\" != \"$PKG\" ]; then\n  echo\
-        \ \"::error::Tag v$TAG does not match pyproject.toml version $PKG\"\n  exit\
-        \ 1\nfi\n"
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+      - name: Compare tag to pyproject.toml version
+        run: |
+          TAG="${RELEASE_TAG#v}"
+          PKG=$(grep '^version = ' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "Tag version:    $TAG"
+          echo "Package version: $PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag v$TAG does not match pyproject.toml version $PKG"
+            exit 1
+          fi
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs:
-    - test
-    - protocol-gate
-    - version-check
+    needs: [test, protocol-gate, version-check]
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ env.CHECKOUT_REF }}
-        persist-credentials: false
-    - uses: ./.github/actions/bootstrap
-      with:
-        enable-uv-cache: 'false'
-    - run: uv build
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      with:
-        name: dist
-        path: dist/
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+      - uses: ./.github/actions/bootstrap
+        with:
+          enable-uv-cache: "false"
+      - run: uv build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist
+          path: dist/
+
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
@@ -137,139 +233,234 @@ jobs:
       name: pypi
       url: https://pypi.org/p/bernstein
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-      with:
-        name: dist
-        path: dist/
-    - name: Attest build provenance (Sigstore)
-      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-      with:
-        subject-path: dist/*
-    - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
-      with:
-        skip-existing: true
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: dist/
+      # Sigstore build-provenance attestation. Closes the FINOS AIGF
+      # CTRL-MODEL-SUPPLY-CHAIN release-artefact gap previously deferred
+      # in docs/compliance/finos-aigf-mapping.md. Every wheel + sdist
+      # gets a SLSA-3 attestation visible in the GitHub Release's
+      # "Sigstore" tab and verifiable via:
+      #   gh attestation verify <file> --owner sipyourdrink-ltd
+      # Keyless OIDC -- no pre-shared cosign key required at consumer
+      # site. Runs BEFORE the PyPI publish so a transparency-log entry
+      # exists before any consumer can pip-install the artefact.
+      - name: Attest build provenance (Sigstore)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/*"
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          skip-existing: true
+
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 10
+    # Approval stays only on the `publish` job below: that is the one job in
+    # this graph whose OIDC exchange is scoped to the pypi environment (PyPI
+    # trusted publishing). This job does its own token/API auth instead, so
+    # gating it on the same environment only added a second approval click
+    # for no additional protection.
     environment: release-channels
     permissions:
       contents: write
+      # actions: write is required to dispatch the release follow-up workflows
+      # below (a release created with GITHUB_TOKEN does not emit
+      # `release: published`, so none of them start on their own).
       actions: write
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ env.CHECKOUT_REF }}
-        persist-credentials: false
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-      with:
-        name: dist
-        path: dist/
-    - name: Create release
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: "set -euo pipefail\n\nTAG=\"${RELEASE_TAG}\"\nNOTES_FILE=\"docs/release-notes/${TAG}.md\"\
-        \nBODY=\"${RUNNER_TEMP:-/tmp}/release-body.md\"\n\n# The release page carries\
-        \ the notes written for this version, with\n# the generated changelog (and\
-        \ the contributor credits in it) below\n# them. `--generate-notes` on its\
-        \ own publishes the machine changelog\n# as the entire body, which is what\
-        \ every release shipped with until\n# someone rewrote the page by hand after\
-        \ the tag was already public.\n: > \"$BODY\"\nif [ -f \"$NOTES_FILE\" ]; then\n\
-        \  # The page already shows the tag, so drop the file's own H1.\n  awk 'NR\
-        \ == 1 && /^# / { next } { print }' \"$NOTES_FILE\" >> \"$BODY\"\n  printf\
-        \ '\\n---\\n\\n' >> \"$BODY\"\nelse\n  echo \"::warning::$NOTES_FILE is missing;\
-        \ the page will carry only the generated changelog\"\nfi\ngh api \"repos/${GITHUB_REPOSITORY}/releases/generate-notes\"\
-        \ \\\n  -f tag_name=\"$TAG\" --jq .body >> \"$BODY\"\n\nif gh release view\
-        \ \"$TAG\" >/dev/null 2>&1; then\n  gh release upload \"$TAG\" dist/* --clobber\n\
-        else\n  gh release create \"$TAG\" dist/* \\\n    --title \"$TAG\" \\\n  \
-        \  --notes-file \"$BODY\"\nfi\n\nasset_count=$(gh release view \"$TAG\" --json\
-        \ assets --jq '.assets | length')\nif [ \"$asset_count\" -eq 0 ]; then\n \
-        \ echo \"::error::Release $TAG has no assets\"\n  exit 1\nfi\n"
-    - name: Dispatch docker publish (release event from GITHUB_TOKEN does not trigger
-        it)
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        TAG: ${{ env.RELEASE_TAG }}
-      run: gh workflow run publish-docker.yml --ref main -f tag="$TAG"
-    - name: Dispatch Homebrew formula publish (release event from GITHUB_TOKEN does
-        not trigger it)
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        TAG: ${{ env.RELEASE_TAG }}
-      run: gh workflow run publish-homebrew.yml --ref main -f version="${TAG#v}"
-    - name: Dispatch SBOM generation (release event from GITHUB_TOKEN does not trigger
-        it)
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        TAG: ${{ env.RELEASE_TAG }}
-      run: gh workflow run sbom.yml --ref main -f ref="$TAG"
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: dist/
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="${RELEASE_TAG}"
+          NOTES_FILE="docs/release-notes/${TAG}.md"
+          BODY="${RUNNER_TEMP:-/tmp}/release-body.md"
+
+          # The release page carries the notes written for this version, with
+          # the generated changelog (and the contributor credits in it) below
+          # them. `--generate-notes` on its own publishes the machine changelog
+          # as the entire body, which is what every release shipped with until
+          # someone rewrote the page by hand after the tag was already public.
+          : > "$BODY"
+          if [ -f "$NOTES_FILE" ]; then
+            # The page already shows the tag, so drop the file's own H1.
+            awk 'NR == 1 && /^# / { next } { print }' "$NOTES_FILE" >> "$BODY"
+            printf '\n---\n\n' >> "$BODY"
+          else
+            echo "::warning::$NOTES_FILE is missing; the page will carry only the generated changelog"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body >> "$BODY"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "$TAG" \
+              --notes-file "$BODY"
+          fi
+
+          asset_count=$(gh release view "$TAG" --json assets --jq '.assets | length')
+          if [ "$asset_count" -eq 0 ]; then
+            echo "::error::Release $TAG has no assets"
+            exit 1
+          fi
+
+      # Three workflows fire on `release: published`, but a release created
+      # with GITHUB_TOKEN does not emit that event (loop-prevention on
+      # token-authored events), so none of them would ever run for an
+      # automated release. Dispatch each one explicitly. All three keep their
+      # native `release: published` trigger for releases created by a human or
+      # PAT; workflow_dispatch is exempt from the loop-prevention, and every
+      # one of them is idempotent for a repeated run on the same tag (image
+      # push, formula commit, SBOM asset upload).
+      - name: Dispatch docker publish (release event from GITHUB_TOKEN does not trigger it)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: gh workflow run publish-docker.yml --ref main -f tag="$TAG"
+
+      # publish-homebrew.yml takes the bare version (3.12.0), not the tag.
+      - name: Dispatch Homebrew formula publish (release event from GITHUB_TOKEN does not trigger it)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: gh workflow run publish-homebrew.yml --ref main -f version="${TAG#v}"
+
+      # sbom.yml takes the tag as its build ref and attaches both SBOMs to the
+      # release it resolves for that ref.
+      - name: Dispatch SBOM generation (release event from GITHUB_TOKEN does not trigger it)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: gh workflow run sbom.yml --ref main -f ref="$TAG"
+
   publish-npm:
     name: Publish npm wrapper
     runs-on: ubuntu-latest
+    # Approval stays only on the `publish` job below: the npm wrapper still
+    # publishes with a long-lived NPM_TOKEN rather than OIDC trusted
+    # publishing (see the comment on that step), so this job has no
+    # environment-scoped credential that the approval was protecting.
     environment: release-channels
     needs: build
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ env.CHECKOUT_REF }}
-        persist-credentials: false
-    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-      with:
-        node-version: 24
-        registry-url: https://registry.npmjs.org
-    - name: Sync version from tag
-      run: 'VERSION="${RELEASE_TAG#v}"
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+      # zizmor cache-poisoning: explicit no-cache on tag-triggered npm publish
+      # so a transitive lockfile bump can't be cached and re-served.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7 # zizmor: ignore[cache-poisoning]
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Sync version from tag
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          cd packaging/npm
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+      - name: Publish to npm
+        env:
+          # packaging/npm/.npmrc uses ${NPM_TOKEN} for interpolation, so
+          # both variables must be set. NODE_AUTH_TOKEN is kept for
+          # compatibility with actions/setup-node's default config.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Trusted publishing for the npm wrapper needs a registry-side
+        # publisher configuration; token auth stays until that exists.
+        run: | # zizmor: ignore[use-trusted-publishing]
+          set -uo pipefail
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is not configured; the npm wrapper cannot be published"
+            exit 1
+          fi
+          cd packaging/npm
+          # This step used to demote every publish failure to a ::warning, so an
+          # unauthorised token produced a green job while the registry kept
+          # serving the last version that did publish. Exactly one failure is
+          # legitimately non-fatal: the version is already on the registry,
+          # which happens when this job runs twice for the same tag (a workflow
+          # re-run, or the tag-push and workflow_dispatch triggers racing).
+          # npm reports that as EPUBLISHCONFLICT; older clients report an E403
+          # "cannot publish over the previously published versions". Everything
+          # else -- including the "Not Found" the registry returns for a token
+          # without publish rights on the package -- fails the job.
+          #
+          # GitHub runs this step under `bash -e`, so errexit is disabled
+          # around the capture; without it the `out=$(...)` assignment would
+          # abort the step before the exit code can be classified.
+          set +e
+          out=$(npm publish --access public 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          fi
+          if printf '%s' "$out" \
+            | grep -qiE 'EPUBLISHCONFLICT|cannot publish over the previously published version'; then
+            echo "::notice::npm wrapper version is already on the registry; treating the conflict as success (idempotent)"
+            exit 0
+          fi
+          echo "::error::npm wrapper publish failed (exit ${code}); the registry is now behind this release"
+          exit "$code"
 
-        cd packaging/npm
-
-        npm version "$VERSION" --no-git-tag-version --allow-same-version
-
-        '
-    - name: Publish to npm
-      env:
-        NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      run: "set -uo pipefail\nif [ -z \"${NPM_TOKEN:-}\" ]; then\n  echo \"::error::NPM_TOKEN\
-        \ is not configured; the npm wrapper cannot be published\"\n  exit 1\nfi\n\
-        cd packaging/npm\n# This step used to demote every publish failure to a ::warning,\
-        \ so an\n# unauthorised token produced a green job while the registry kept\n\
-        # serving the last version that did publish. Exactly one failure is\n# legitimately\
-        \ non-fatal: the version is already on the registry,\n# which happens when\
-        \ this job runs twice for the same tag (a workflow\n# re-run, or the tag-push\
-        \ and workflow_dispatch triggers racing).\n# npm reports that as EPUBLISHCONFLICT;\
-        \ older clients report an E403\n# \"cannot publish over the previously published\
-        \ versions\". Everything\n# else -- including the \"Not Found\" the registry\
-        \ returns for a token\n# without publish rights on the package -- fails the\
-        \ job.\n#\n# GitHub runs this step under `bash -e`, so errexit is disabled\n\
-        # around the capture; without it the `out=$(...)` assignment would\n# abort\
-        \ the step before the exit code can be classified.\nset +e\nout=$(npm publish\
-        \ --access public 2>&1)\ncode=$?\nset -e\nprintf '%s\\n' \"$out\"\nif [ \"\
-        $code\" -eq 0 ]; then\n  exit 0\nfi\nif printf '%s' \"$out\" \\\n  | grep\
-        \ -qiE 'EPUBLISHCONFLICT|cannot publish over the previously published version';\
-        \ then\n  echo \"::notice::npm wrapper version is already on the registry;\
-        \ treating the conflict as success (idempotent)\"\n  exit 0\nfi\necho \"::error::npm\
-        \ wrapper publish failed (exit ${code}); the registry is now behind this release\"\
-        \nexit \"$code\"\n"
+  # RPM channel (#3325). packaging/rpm/bernstein.spec ships a wrapper that
+  # resolves the package from PyPI at run time, so this job waits for the PyPI
+  # publish and then submits a source RPM built at the tag version to the
+  # Fedora Copr build service.
+  #
+  # It hangs off the tag trigger like every other job here rather than off
+  # `release: published`: a release created with GITHUB_TOKEN raises no event,
+  # which is what already leaves the release-event consumers unreachable for
+  # automated releases (#3323).
+  #
+  # No warn-and-continue. The RPM channel leaves no artefact in the repository,
+  # so a swallowed failure here is invisible until someone installs the package
+  # by hand - the failure mode #3322 documents for the npm wrapper.
+  # Release-path RPM install smoke (#3558, #3559). Builds the binary RPM from
+  # the same SRPM the Copr job submits, installs it in a container per
+  # published chroot family, and asserts `bernstein --version` reports the
+  # release version with networking disabled. Runs before the Copr submission
+  # so a package that does not install - or installs a launcher instead of
+  # the program - fails the release here rather than reaching a user.
   rpm-install-smoke:
     name: RPM install smoke (${{ matrix.image }})
     runs-on: ubuntu-latest
     needs: publish
+    # Mirrors the publish-copr condition: run on the tag path once PyPI has
+    # published (the spec installs the release from PyPI at build time), and
+    # on a channel-only republish where the upstream graph is skipped.
     if: ${{ always() && (inputs.copr_only || needs.publish.result == 'success') }}
     timeout-minutes: 30
     permissions:
@@ -277,288 +468,378 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image:
-        - fedora:43
-        - fedora:44
-        - quay.io/centos/centos:stream9
-        - quay.io/centos/centos:stream10
-    steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.copr_only && github.ref || inputs.tag || github.ref }}
-        persist-credentials: false
-    - name: Wait for the release to be visible on PyPI
-      run: 'set -euo pipefail
-
-        VERSION="${RELEASE_TAG#v}"
-
-        # The spec installs `bernstein==VERSION` from PyPI at build time and
-
-        # the index can lag the publish by a short window. Distinguish
-
-        # "not yet visible" from "the RPM is broken" by waiting here, with
-
-        # a bounded budget, before the smoke starts.
-
+        # One container per published chroot, so nothing is submitted to Copr
+        # for a target this never installed on. The intended chroot list lives
+        # in docs/operations/release.md ("Chroots").
         #
+        # fedora-rawhide is deliberately not gated here: it is a moving target
+        # whose breakage is routinely unrelated to this package, and failing a
+        # release on rawhide churn costs more than it catches. Copr still
+        # builds it and reports its own failure.
+        #
+        # Both arches are not gated either: these runners are x86_64 and an
+        # aarch64 cell would have to build a ~50 MB venv of compiled wheels
+        # under QEMU. The spec's arch-dependent surface is the wheel set pip
+        # selects, which Copr resolves natively per chroot and fails loudly on.
+        image:
+          - "fedora:43"
+          - "fedora:44"
+          - "quay.io/centos/centos:stream9"
+          - "quay.io/centos/centos:stream10"
+    steps:
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Same ref logic as publish-copr below: a republished tag can
+          # predate the smoke harness, so in that mode the packaging sources
+          # come from the dispatch ref instead of the tag.
+          ref: ${{ inputs.copr_only && github.ref || inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Wait for the release to be visible on PyPI
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          # The spec installs `bernstein==VERSION` from PyPI at build time and
+          # the index can lag the publish by a short window. Distinguish
+          # "not yet visible" from "the RPM is broken" by waiting here, with
+          # a bounded budget, before the smoke starts.
+          #
+          # The wait polls the simple index rather than the JSON API: they are
+          # separate caches with separate propagation, and `pip` resolves
+          # against the index. Polling the JSON API let a green wait be
+          # followed by `No matching distribution found` (#3815).
+          python3 scripts/wait_for_pypi_visibility.py "${VERSION}"
+      - name: Build the RPM, install it, run it offline
+        env:
+          SMOKE_IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          scripts/rpm_install_smoke.sh "${SMOKE_IMAGE}" "${RELEASE_TAG#v}"
 
-        # The wait polls the simple index rather than the JSON API: they are
-
-        # separate caches with separate propagation, and `pip` resolves
-
-        # against the index. Polling the JSON API let a green wait be
-
-        # followed by `No matching distribution found` (#3815).
-
-        python3 scripts/wait_for_pypi_visibility.py "${VERSION}"
-
-        '
-    - name: Build the RPM, install it, run it offline
-      env:
-        SMOKE_IMAGE: ${{ matrix.image }}
-      run: 'set -euo pipefail
-
-        scripts/rpm_install_smoke.sh "${SMOKE_IMAGE}" "${RELEASE_TAG#v}"
-
-        '
   publish-copr:
     name: Publish RPM to Copr
     runs-on: ubuntu-latest
     environment: pypi
-    needs:
-    - publish
-    - rpm-install-smoke
-    if: ${{ always() && needs.rpm-install-smoke.result == 'success' && (inputs.copr_only
-      || needs.publish.result == 'success') }}
+    needs: [publish, rpm-install-smoke]
+    # `always()` so a channel-only republish still runs with the upstream
+    # release graph skipped; the PyPI result still gates the normal tag path.
+    # The install smoke gates both paths: Copr accepting a build says nothing
+    # about whether the result installs, so a failed smoke must stop the
+    # submission rather than let Copr publish a package that does not work.
+    if: ${{ always() && needs.rpm-install-smoke.result == 'success' && (inputs.copr_only || needs.publish.result == 'success') }}
+    # Comfortably above COPR_WATCH_SECONDS below, so the watch always ends on
+    # its own deadline rather than being cancelled part-way through.
     timeout-minutes: 30
     permissions:
       contents: read
     env:
       COPR_PROJECT: alexchernysh/bernstein
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.copr_only && github.ref || inputs.tag || github.ref }}
-        persist-credentials: false
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-      with:
-        python-version: '3.13'
-    - name: Install rpmbuild and copr-cli
-      run: 'set -euo pipefail
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # A republished tag can predate the spec renderer, so in that mode the
+          # packaging sources come from the dispatch ref instead of the tag.
+          ref: ${{ inputs.copr_only && github.ref || inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install rpmbuild and copr-cli
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm
+          # Pinned: an unpinned installer lets an upstream release change what
+          # runs in the job that holds the publishing credential.
+          #
+          # 2.4 rather than 2.5: 2.5 imports `rich` at module scope but
+          # declares only `copr, humanize, jinja2, setuptools`, so a clean
+          # install of it produces a CLI that cannot start.
+          python3 -m pip install --disable-pip-version-check "copr-cli==2.4"
+          command -v rpmbuild
+          # Run the CLI once here: an install that cannot import fails in this
+          # step rather than after the API token is written to disk.
+          copr-cli --version
+      - name: Write copr-cli configuration
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${COPR_CONFIG:-}" ]; then
+            echo "::error::COPR_CONFIG secret is not configured; the RPM channel cannot publish"
+            exit 1
+          fi
+          mkdir -p ~/.config
+          printf '%s\n' "${COPR_CONFIG}" > ~/.config/copr
+          # copr-cli reads an API token from this file; keep it owner-only.
+          chmod 600 ~/.config/copr
+      - name: Build the source RPM at the release version
+        id: srpm
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          SRPM=$(python3 scripts/build_copr_srpm.py --version "${VERSION}" --outdir "${RUNNER_TEMP}/copr")
+          echo "built ${SRPM}"
+          echo "path=${SRPM}" >> "$GITHUB_OUTPUT"
+      - name: Submit build to Copr
+        env:
+          SRPM_PATH: ${{ steps.srpm.outputs.path }}
+          # The watch's own budget. copr-cli's built-in watch has none: it runs
+          # until the build ends, however long Copr's public queue takes, and a
+          # first end-to-end run spent 45 minutes there before the job's
+          # timeout cancelled the step mid-wait.
+          COPR_WATCH_SECONDS: "900"
+        run: |
+          set -euo pipefail
+          echo "submitting ${SRPM_PATH} to ${COPR_PROJECT}"
+          # copr-cli exits non-zero when Copr rejects the submission, so a bad
+          # SRPM or an expired token fails right here.
+          copr-cli build --nowait "${COPR_PROJECT}" "${SRPM_PATH}" | tee "${RUNNER_TEMP}/copr-submit.log"
 
-        sudo apt-get update
+          BUILD_ID=$(sed -n 's/^Created builds: \([0-9][0-9]*\).*$/\1/p' "${RUNNER_TEMP}/copr-submit.log" | head -1)
+          if [ -z "${BUILD_ID}" ]; then
+            echo "::error::Copr accepted no build id; the submission output above is the evidence"
+            exit 1
+          fi
 
-        sudo apt-get install -y --no-install-recommends rpm
+          # Terminal-state handling lives in the watcher, which is unit-tested;
+          # a failed build fails this step, and a build still queued at the
+          # deadline is handed to reconcile-release.yml.
+          python3 scripts/copr_build_watch.py \
+            --build-id "${BUILD_ID}" \
+            --deadline-seconds "${COPR_WATCH_SECONDS}"
 
-        # Pinned: an unpinned installer lets an upstream release change what
-
-        # runs in the job that holds the publishing credential.
-
-        #
-
-        # 2.4 rather than 2.5: 2.5 imports `rich` at module scope but
-
-        # declares only `copr, humanize, jinja2, setuptools`, so a clean
-
-        # install of it produces a CLI that cannot start.
-
-        python3 -m pip install --disable-pip-version-check "copr-cli==2.4"
-
-        command -v rpmbuild
-
-        # Run the CLI once here: an install that cannot import fails in this
-
-        # step rather than after the API token is written to disk.
-
-        copr-cli --version
-
-        '
-    - name: Write copr-cli configuration
-      env:
-        COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
-      run: "set -euo pipefail\nif [ -z \"${COPR_CONFIG:-}\" ]; then\n  echo \"::error::COPR_CONFIG\
-        \ secret is not configured; the RPM channel cannot publish\"\n  exit 1\nfi\n\
-        mkdir -p ~/.config\nprintf '%s\\n' \"${COPR_CONFIG}\" > ~/.config/copr\n#\
-        \ copr-cli reads an API token from this file; keep it owner-only.\nchmod 600\
-        \ ~/.config/copr\n"
-    - name: Build the source RPM at the release version
-      id: srpm
-      run: 'set -euo pipefail
-
-        VERSION="${RELEASE_TAG#v}"
-
-        SRPM=$(python3 scripts/build_copr_srpm.py --version "${VERSION}" --outdir
-        "${RUNNER_TEMP}/copr")
-
-        echo "built ${SRPM}"
-
-        echo "path=${SRPM}" >> "$GITHUB_OUTPUT"
-
-        '
-    - name: Submit build to Copr
-      env:
-        SRPM_PATH: ${{ steps.srpm.outputs.path }}
-        COPR_WATCH_SECONDS: '900'
-      run: "set -euo pipefail\necho \"submitting ${SRPM_PATH} to ${COPR_PROJECT}\"\
-        \n# copr-cli exits non-zero when Copr rejects the submission, so a bad\n#\
-        \ SRPM or an expired token fails right here.\ncopr-cli build --nowait \"${COPR_PROJECT}\"\
-        \ \"${SRPM_PATH}\" | tee \"${RUNNER_TEMP}/copr-submit.log\"\n\nBUILD_ID=$(sed\
-        \ -n 's/^Created builds: \\([0-9][0-9]*\\).*$/\\1/p' \"${RUNNER_TEMP}/copr-submit.log\"\
-        \ | head -1)\nif [ -z \"${BUILD_ID}\" ]; then\n  echo \"::error::Copr accepted\
-        \ no build id; the submission output above is the evidence\"\n  exit 1\nfi\n\
-        \n# Terminal-state handling lives in the watcher, which is unit-tested;\n\
-        # a failed build fails this step, and a build still queued at the\n# deadline\
-        \ is handed to reconcile-release.yml.\npython3 scripts/copr_build_watch.py\
-        \ \\\n  --build-id \"${BUILD_ID}\" \\\n  --deadline-seconds \"${COPR_WATCH_SECONDS}\"\
-        \n"
+  # MCP registry listing (#2369). server.json is regenerated from
+  # pyproject.toml by scripts/gen_distribution_manifests.py, so the listing
+  # cannot drift from the released package version; the version check below
+  # blocks the submission rather than shipping a stale manifest. Registry
+  # submission is not on the release critical path (external review
+  # latency), so a registry outage cannot fail the release itself.
   publish-mcp-registry:
     name: Publish MCP registry listing
     runs-on: ubuntu-latest
     needs: publish
-    if: ${{ always() && (inputs.registry_only || needs.publish.result == 'success')
-      }}
+    # Mirrors the publish-copr condition: run on the tag path once PyPI has
+    # published, and on a registry-only republish where the upstream graph
+    # is skipped.
+    if: ${{ always() && (inputs.registry_only || needs.publish.result == 'success') }}
+    # Wider than the other publish jobs: the GHCR-image wait step below polls
+    # for the OCI image the listing pins (built in parallel by
+    # publish-docker.yml, up to ~14 min) before submitting.
     timeout-minutes: 25
     continue-on-error: true
+    # Approval stays only on the `publish` job below. This job also holds
+    # id-token: write, but the MCP registry's GitHub OIDC exchange only
+    # checks the token's repository-owner claim (io.github.<owner>/* is
+    # granted to any workflow run in the org) -- it does not check which
+    # environment, if any, the run declared, so gating it on the pypi
+    # environment added an approval click without adding protection.
     environment: release-channels
     permissions:
       contents: read
       id-token: write
     steps:
-    - name: Harden runner (audit mode)
-      uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-      with:
-        egress-policy: audit
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ env.CHECKOUT_REF }}
-        persist-credentials: false
-    - name: Check server.json version matches the release tag
-      run: "set -euo pipefail\nVERSION=\"${RELEASE_TAG#v}\"\nMANIFEST_VERSION=$(python3\
-        \ -c \"import json; print(json.load(open('server.json'))['version'])\")\n\
-        if [ \"$MANIFEST_VERSION\" != \"$VERSION\" ]; then\n  echo \"::error::server.json\
-        \ version $MANIFEST_VERSION does not match release $VERSION\"\n  exit 1\n\
-        fi\n"
-    - name: Check docker-mcp catalog source.commit matches the release commit
-      env:
-        REGISTRY_ONLY: ${{ inputs.registry_only }}
-      run: "set -euo pipefail\n# server.yaml is hand-maintained: the commit hash cannot\
-        \ be known\n# before the release commit exists, so nothing regenerates it.\
-        \ This\n# step catches a forgotten refresh before the catalog PR ships a\n\
-        # source.commit that does not point at the release being submitted.\n#\n#\
-        \ The docker-mcp catalog is a separate channel from the registry\n# listing\
-        \ this job submits, so it does not get to block a\n# registry-only republish\
-        \ -- a stale pin here is worth flagging,\n# not worth losing the listing over.\n\
-        python3 - <<'PY'\nimport os\nimport re\nimport subprocess\nfrom pathlib import\
-        \ Path\n\nregistry_only = os.environ.get(\"REGISTRY_ONLY\") == \"true\"\n\
-        annotation = \"warning\" if registry_only else \"error\"\n\ndef report(message:\
-        \ str) -> None:\n    print(f\"::{annotation}::{message}\")\n    if not registry_only:\n\
-        \        raise SystemExit(1)\n\ntext = Path(\"packaging/docker-mcp/server.yaml\"\
-        ).read_text(encoding=\"utf-8\")\nmatch = re.search(r\"^  commit:\\s*([0-9a-f]{40})\\\
-        s*$\", text, re.MULTILINE)\nif not match:\n    report(\"packaging/docker-mcp/server.yaml\
-        \ has no valid source.commit (40-char lowercase hex SHA)\")\nelse:\n    pinned\
-        \ = match.group(1)\n    head = subprocess.run(\n        [\"git\", \"rev-parse\"\
-        , \"HEAD\"], capture_output=True, text=True, check=True\n    ).stdout.strip()\n\
-        \    if pinned != head:\n        report(\n            f\"packaging/docker-mcp/server.yaml\
-        \ source.commit {pinned} does not match \"\n            f\"the release commit\
-        \ {head}; refresh it before opening the catalog PR\"\n        )\nPY\n"
-    - name: Install mcp-publisher
-      env:
-        MCP_PUBLISHER_VERSION: v1.8.0
-        MCP_PUBLISHER_SHA256: 1370446bbe74d562608e8005a6ccce02d146a661fbd78674e11cc70b9618d6cf
-      run: "set -euo pipefail\n# This job holds id-token: write, so the publisher\
-        \ binary must be\n# pinned and integrity-checked before it runs. A moving\
-        \ \"latest\"\n# download would let an upstream tag change what executes here;\n\
-        # instead fetch a pinned immutable release-tag asset and verify it\n# against\
-        \ a sha256 recorded at authoring time before extract/execute.\nOS=$(uname\
-        \ -s | tr '[:upper:]' '[:lower:]')\nARCH=$(uname -m)\nif [ \"$OS\" != \"linux\"\
-        \ ] || [ \"$ARCH\" != \"x86_64\" ]; then\n  echo \"::error::pinned mcp-publisher\
-        \ checksum covers linux/amd64 only; runner is ${OS}/${ARCH}\"\n  exit 1\n\
-        fi\nasset=\"mcp-publisher_linux_amd64.tar.gz\"\ncurl -fsSL \\\n  \"https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/${asset}\"\
-        \ \\\n  -o \"$asset\"\necho \"${MCP_PUBLISHER_SHA256}  ${asset}\" | sha256sum\
-        \ -c -\ntar xz -f \"$asset\" mcp-publisher\nrm -f \"$asset\"\n./mcp-publisher\
-        \ --version\n"
-    - name: Wait for the release image in GHCR
-      id: waitimg
-      run: "set -uo pipefail\n# The MCP registry validates that every OCI package\
-        \ in the listing\n# resolves in its registry before it accepts the submission.\
-        \ The GHCR\n# image is built by publish-docker.yml, which the github-release\
-        \ job\n# dispatches in parallel with this job, so the image is usually still\n\
-        # building when this job reaches the publish step. Submitting then\n# returns\
-        \ HTTP 400 \"OCI image ... does not exist in the registry\" and\n# the listing\
-        \ is dropped for that release. Poll GHCR for the exact\n# reference the listing\
-        \ pins and only publish once it resolves.\nOCI_REF=$(python3 -c \"import json;\
-        \ pkgs=json.load(open('server.json')).get('packages',[]); print(next((p['identifier']\
-        \ for p in pkgs if p.get('registryType')=='oci'), ''))\")\nif [ -z \"$OCI_REF\"\
-        \ ]; then\n  echo \"::notice::server.json has no OCI package; nothing to wait\
-        \ for\"\n  echo \"image_present=true\" >> \"$GITHUB_OUTPUT\"\n  exit 0\nfi\n\
-        echo \"listing pins OCI image: $OCI_REF\"\n# ghcr.io/OWNER/NAME:VERSION ->\
-        \ host / repo : tag\nhost=\"${OCI_REF%%/*}\"\nrest=\"${OCI_REF#*/}\"\nrepo=\"\
-        ${rest%:*}\"\ntag=\"${rest##*:}\"\nmanifest_url=\"https://${host}/v2/${repo}/manifests/${tag}\"\
-        \ntoken_url=\"https://${host}/token?scope=repository:${repo}:pull\"\naccept=\"\
-        application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json\"\
-        \n# Up to ~18 min covers the observed cold-cache GHCR build window\n# (~1.5-14\
-        \ min) with headroom; poll every 20s.\ndeadline=$(( $(date +%s) + 1080 ))\n\
-        attempt=0\nwhile :; do\n  attempt=$((attempt + 1))\n  token=$(curl -fsSL \"\
-        $token_url\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get('token',''))\"\
-        \ 2>/dev/null || true)\n  status=$(curl -s -o /dev/null -w \"%{http_code}\"\
-        \ -H \"Authorization: Bearer ${token}\" -H \"Accept: ${accept}\" \"$manifest_url\"\
-        \ || echo \"000\")\n  if [ \"$status\" = \"200\" ]; then\n    echo \"image\
-        \ present after ${attempt} attempt(s): ${OCI_REF}\"\n    echo \"image_present=true\"\
-        \ >> \"$GITHUB_OUTPUT\"\n    exit 0\n  fi\n  if [ \"$(date +%s)\" -ge \"$deadline\"\
-        \ ]; then\n    echo \"::warning::${OCI_REF} did not resolve in GHCR within\
-        \ the wait window (last status ${status}); skipping the MCP registry publish.\
-        \ Re-run this job once publish-docker.yml has pushed the image; the publish\
-        \ is idempotent.\"\n    echo \"image_present=false\" >> \"$GITHUB_OUTPUT\"\
-        \n    exit 0\n  fi\n  echo \"attempt ${attempt}: image not ready yet (status\
-        \ ${status}); retrying in 20s\"\n  sleep 20\ndone\n"
-    - name: Publish server.json
-      if: steps.waitimg.outputs.image_present == 'true'
-      run: "set -uo pipefail\n./mcp-publisher login github-oidc\n# GitHub runs this\
-        \ step under `bash -e`, so without disabling\n# errexit the `out=$(...)` capture\
-        \ below would abort the step on\n# the publisher's non-zero exit before we\
-        \ can inspect the error.\n# Turn errexit off here so the duplicate-version\
-        \ branch can run\n# and the real exit code is captured in `code`.\nset +e\n\
-        # Idempotent publish: the registry rejects re-submitting a version that\n\
-        # is already live with an HTTP 400 \"cannot publish duplicate version\".\n\
-        # That happens whenever this job runs more than once for the same\n# release\
-        \ (a workflow re-run, or the tag-push and workflow_dispatch\n# triggers racing\
-        \ to publish the same server.json). The listing is\n# already correct in that\
-        \ case, so a duplicate is a success, not a\n# failure \u2014 swallow it and\
-        \ let any other error still fail the step.\nout=$(./mcp-publisher publish\
-        \ 2>&1)\ncode=$?\nprintf '%s\\n' \"$out\"\nif [ \"$code\" -ne 0 ]; then\n\
-        \  if printf '%s' \"$out\" | grep -qi \"duplicate version\"; then\n    echo\
-        \ \"::notice::version already present in the MCP registry; treating duplicate\
-        \ as success (idempotent)\"\n    exit 0\n  fi\n  exit \"$code\"\nfi\n"
-'on':
-  push:
-    tags:
-    - v*
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to publish (e.g. v2.8.1)
-        required: true
-        type: string
-      copr_only:
-        description: Run only the Copr RPM publish for the given tag
-        required: false
-        default: false
-        type: boolean
-      registry_only:
-        description: Run only the MCP registry publish for the given tag
-        required: false
-        default: false
-        type: boolean
-      ref:
-        description: Git ref to checkout (branch, tag, or commit). Defaults to the
-          tag to publish.
-        required: false
-        type: string
+      - name: Harden runner (audit mode)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+      # Stdlib only, on purpose: this job installs no dependencies, so a
+      # step here must not import the package. Regenerating the manifests
+      # does import it (scripts/gen_distribution_manifests.py reaches
+      # src/bernstein/core/skills/, which needs the project environment),
+      # and that regeneration is already covered before the tag exists --
+      # by the "Distribution manifest drift check" step of the Repo hygiene
+      # job in ci.yml, which bootstraps the environment first. Repo hygiene
+      # is a `needs` of the required "CI gate" check, so a drifted manifest
+      # cannot reach main and therefore cannot be tagged. What is left for
+      # release time is the one thing CI cannot know: whether the listing
+      # about to be submitted carries the version being released.
+      - name: Check server.json version matches the release tag
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('server.json'))['version'])")
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::server.json version $MANIFEST_VERSION does not match release $VERSION"
+            exit 1
+          fi
+      - name: Annotate stale docker-mcp catalog source.commit
+        env:
+          REGISTRY_ONLY: ${{ inputs.registry_only }}
+        run: |
+          set -euo pipefail
+          # server.yaml source.commit cannot match the release commit on the tag
+          # path: a file cannot contain the hash of the commit that contains it,
+          # and the release commit is additionally a merge-queue squash whose
+          # hash does not exist until after the merge. The check always fails on
+          # tag releases and always succeeds on registry_only replays (because
+          # the commit that tagged the release is by then in history and can be
+          # pinned). Annotate the stale pin on every path so it is visible in
+          # job logs, but do not block the install/wait/publish steps.
+          #
+          # The rendered catalog payload (next step) substitutes the release
+          # commit at publish time and uploads it as a job artifact, so the
+          # catalog PR is opened from the rendered file with the correct hash.
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          # Always warn; never block the registry listing over a stale catalog pin.
+          annotation = "warning"
+
+          def report(message: str) -> None:
+              print(f"::{annotation}::{message}")
+
+          text = Path("packaging/docker-mcp/server.yaml").read_text(encoding="utf-8")
+          match = re.search(r"^  commit:\s*([0-9a-f]{40})\s*$", text, re.MULTILINE)
+          if not match:
+              report("packaging/docker-mcp/server.yaml has no valid source.commit (40-char lowercase hex SHA)")
+          else:
+              pinned = match.group(1)
+              head = subprocess.run(
+                  ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+              ).stdout.strip()
+              if pinned != head:
+                  report(
+                      f"packaging/docker-mcp/server.yaml source.commit {pinned} does not match "
+                      f"the release commit {head}; refresh it before opening the catalog PR"
+                  )
+          PY
+
+      - name: Render docker-mcp catalog with release commit
+        run: |
+          set -euo pipefail
+          # Substitute the release commit into server.yaml and upload the
+          # rendered payload as a job artifact. The catalog PR is opened from
+          # this rendered file so source.commit carries the actual release
+          # commit, not the stale pin from the checked-in template.
+          RELEASE_COMMIT=$(git rev-parse HEAD)
+          python3 scripts/render_docker_mcp_catalog.py \
+            packaging/docker-mcp/server.yaml \
+            "$RELEASE_COMMIT" \
+            > server.yaml.rendered
+          echo "Rendered catalog payload for commit ${RELEASE_COMMIT}"
+
+      - name: Upload rendered catalog payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b7fa7ce1b192a9e6ce434e6f3 # v4.6.2
+        with:
+          name: docker-mcp-catalog-rendered
+          path: server.yaml.rendered
+          retention-days: 90
+
+      - name: Install mcp-publisher
+        env:
+          # Pinned mcp-publisher release. Bumping requires updating the tag and
+          # the sha256 from that release's published checksums.txt together.
+          MCP_PUBLISHER_VERSION: v1.8.0
+          MCP_PUBLISHER_SHA256: 1370446bbe74d562608e8005a6ccce02d146a661fbd78674e11cc70b9618d6cf
+        run: |
+          set -euo pipefail
+          # This job holds id-token: write, so the publisher binary must be
+          # pinned and integrity-checked before it runs. A moving "latest"
+          # download would let an upstream tag change what executes here;
+          # instead fetch a pinned immutable release-tag asset and verify it
+          # against a sha256 recorded at authoring time before extract/execute.
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m)
+          if [ "$OS" != "linux" ] || [ "$ARCH" != "x86_64" ]; then
+            echo "::error::pinned mcp-publisher checksum covers linux/amd64 only; runner is ${OS}/${ARCH}"
+            exit 1
+          fi
+          asset="mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/${asset}" \
+            -o "$asset"
+          echo "${MCP_PUBLISHER_SHA256}  ${asset}" | sha256sum -c -
+          tar xz -f "$asset" mcp-publisher
+          rm -f "$asset"
+          ./mcp-publisher --version
+      - name: Wait for the release image in GHCR
+        id: waitimg
+        run: |
+          set -uo pipefail
+          # The MCP registry validates that every OCI package in the listing
+          # resolves in its registry before it accepts the submission. The GHCR
+          # image is built by publish-docker.yml, which the github-release job
+          # dispatches in parallel with this job, so the image is usually still
+          # building when this job reaches the publish step. Submitting then
+          # returns HTTP 400 "OCI image ... does not exist in the registry" and
+          # the listing is dropped for that release. Poll GHCR for the exact
+          # reference the listing pins and only publish once it resolves.
+          OCI_REF=$(python3 -c "import json; pkgs=json.load(open('server.json')).get('packages',[]); print(next((p['identifier'] for p in pkgs if p.get('registryType')=='oci'), ''))")
+          if [ -z "$OCI_REF" ]; then
+            echo "::notice::server.json has no OCI package; nothing to wait for"
+            echo "image_present=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "listing pins OCI image: $OCI_REF"
+          # ghcr.io/OWNER/NAME:VERSION -> host / repo : tag
+          host="${OCI_REF%%/*}"
+          rest="${OCI_REF#*/}"
+          repo="${rest%:*}"
+          tag="${rest##*:}"
+          manifest_url="https://${host}/v2/${repo}/manifests/${tag}"
+          token_url="https://${host}/token?scope=repository:${repo}:pull"
+          accept="application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json"
+          # Up to ~18 min covers the observed cold-cache GHCR build window
+          # (~1.5-14 min) with headroom; poll every 20s.
+          deadline=$(( $(date +%s) + 1080 ))
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            token=$(curl -fsSL "$token_url" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+            status=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" "$manifest_url" || echo "000")
+            if [ "$status" = "200" ]; then
+              echo "image present after ${attempt} attempt(s): ${OCI_REF}"
+              echo "image_present=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::warning::${OCI_REF} did not resolve in GHCR within the wait window (last status ${status}); skipping the MCP registry publish. Re-run this job once publish-docker.yml has pushed the image; the publish is idempotent."
+              echo "image_present=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "attempt ${attempt}: image not ready yet (status ${status}); retrying in 20s"
+            sleep 20
+          done
+      - name: Publish server.json
+        if: steps.waitimg.outputs.image_present == 'true'
+        run: |
+          set -uo pipefail
+          ./mcp-publisher login github-oidc
+          # GitHub runs this step under `bash -e`, so without disabling
+          # errexit the `out=$(...)` capture below would abort the step on
+          # the publisher's non-zero exit before we can inspect the error.
+          # Turn errexit off here so the duplicate-version branch can run
+          # and the real exit code is captured in `code`.
+          set +e
+          # Idempotent publish: the registry rejects re-submitting a version that
+          # is already live with an HTTP 400 "cannot publish duplicate version".
+          # That happens whenever this job runs more than once for the same
+          # release (a workflow re-run, or the tag-push and workflow_dispatch
+          # triggers racing to publish the same server.json). The listing is
+          # already correct in that case, so a duplicate is a success, not a
+          # failure — swallow it and let any other error still fail the step.
+          out=$(./mcp-publisher publish 2>&1)
+          code=$?
+          printf '%s\n' "$out"
+          if [ "$code" -ne 0 ]; then
+            if printf '%s' "$out" | grep -qi "duplicate version"; then
+              echo "::notice::version already present in the MCP registry; treating duplicate as success (idempotent)"
+              exit 0
+            fi
+            exit "$code"
+          fi
