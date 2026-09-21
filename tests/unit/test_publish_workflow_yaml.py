@@ -444,13 +444,14 @@ def test_docker_mcp_catalog_source_commit_check_exists(workflow: dict[str, Any])
     run = step.get("run")
     assert isinstance(run, str)
     # Must read packaging/docker-mcp/server.yaml
-    assert 'packaging/docker-mcp/server.yaml' in run
+    assert "packaging/docker-mcp/server.yaml" in run
     # Must extract a 40‑char hex SHA
-    assert '([0-9a-f]{40})' in run
+    assert "([0-9a-f]{40})" in run
     # Must compare pinned != head
-    assert 'pinned != head' in run
+    assert "pinned != head" in run
     # Must define warning annotation
     assert 'annotation = "warning"' in run
+
 
 def test_docker_mcp_catalog_render_step_exists(workflow: dict[str, Any]) -> None:
     """The stale pin is replaced by a rendered payload with the actual release commit."""
@@ -458,9 +459,8 @@ def test_docker_mcp_catalog_render_step_exists(workflow: dict[str, Any]) -> None
     run = step.get("run")
     assert isinstance(run, str)
     # Must call the render script
-    assert 'scripts/render_docker_mcp_catalog.py' in run
+    assert "scripts/render_docker_mcp_catalog.py" in run
     # Must substitute the release commit
-    assert 'RELEASE_COMMIT=$(git rev-parse HEAD)' in run
+    assert "RELEASE_COMMIT=$(git rev-parse HEAD)" in run
     # Must produce server.yaml.rendered
-    assert 'server.yaml.rendered' in run
-
+    assert "server.yaml.rendered" in run
