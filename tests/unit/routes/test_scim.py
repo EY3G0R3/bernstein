@@ -120,7 +120,7 @@ def test_service_provider_config_advertises_supported_operations_truthfully(
     mounted = _mounted_methods(app, SCIM_BASE_PATH)
     assert "GET" in mounted, "the read surface must be mounted"
     # PATCH and DELETE are now implemented (slice 3: deactivate/delete)
-    
+
     assert body["patch"]["supported"] is True
     assert "PATCH" in mounted
     assert "DELETE" in mounted

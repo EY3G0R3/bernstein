@@ -440,6 +440,7 @@ def get_user(user_id: str, request: Request) -> _SCIMResponse:
     """Fetch a single agent principal by its SCIM ``id``."""
     identity = identity_store_for_request(request).get(user_id)
     from bernstein.core.identity.agent_jwt import AgentIdentityStatus
+
     if identity is None or identity.status == AgentIdentityStatus.REVOKED:
         return _scim_error(404, f"Principal {user_id} not found", scim_type="invalidValue")
     return _SCIMResponse(content=_scim_user(identity, request))
@@ -456,12 +457,11 @@ def _principal_ledger_for_request(request: Request) -> Any:
     The SCIM write surface appends to the principal ledger, which is separate
     from (but parallel to) the agent identity store used for reads.
     """
+
     from bernstein.core.identity.principals import default_principal_ledger
-    from pathlib import Path
 
     ledger = getattr(request.app.state, "principal_ledger", None)
     if ledger is None:
-
         runtime_dir: Path = request.app.state.runtime_dir  # type: ignore[assignment]
         root = runtime_dir.parent
         ledger = default_principal_ledger(root=root)
