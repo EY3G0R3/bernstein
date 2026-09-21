@@ -786,6 +786,36 @@ class TestWrapperScriptToolInputTruncation:
         expected_cut = str({"command": command})[:50]
         assert expected_cut in stdout
 
+    def test_invalid_value_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BERNSTEIN_LOG_INPUT_CHARS", "unlimited")
+        command = "x" * 500
+        script = ClaudeCodeAdapter._wrapper_script(session_id="s3")
+
+        stdout = self._run_with_command(script, command, env=os.environ.copy())
+
+        # Should not crash and should use default (2000) so full command is logged
+        assert command in stdout
+
+    def test_zero_value_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BERNSTEIN_LOG_INPUT_CHARS", "0")
+        command = "x" * 500
+        script = ClaudeCodeAdapter._wrapper_script(session_id="s4")
+
+        stdout = self._run_with_command(script, command, env=os.environ.copy())
+
+        # Should not crash and should use default (2000) so full command is logged
+        assert command in stdout
+
+    def test_negative_value_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BERNSTEIN_LOG_INPUT_CHARS", "-100")
+        command = "x" * 500
+        script = ClaudeCodeAdapter._wrapper_script(session_id="s5")
+
+        stdout = self._run_with_command(script, command, env=os.environ.copy())
+
+        # Should not crash and should use default (2000) so full command is logged
+        assert command in stdout
+
 
 # ---------------------------------------------------------------------------
 # is_rate_limited() - pre-spawn rate limit detection (CRITICAL-003)
