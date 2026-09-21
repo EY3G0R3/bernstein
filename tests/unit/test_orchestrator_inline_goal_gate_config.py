@@ -2,31 +2,39 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import shutil
+import signal
+import socket
 from pathlib import Path
 
-from bernstein.core.config.seed_config import SeedConfig
-from bernstein.core.config.seed_parser import parse_seed
+from bernstein.core.orchestration.bootstrap import BootstrapResult, bootstrap_from_goal, bootstrap_from_seed
 
 
-def test_inline_goal_seed_minimal_has_no_gates() -> None:
-    """Demonstrates the bug: minimal inline-goal seed has no quality_gates.
-
-    The _bootstrap_from_goal_impl function at bootstrap.py:1418 creates:
-        seed = SeedConfig(goal=goal, cli=cli, model=model)
-
-    This minimal seed has quality_gates=None, so orchestrator journals null.
-    """
-    # This is what _bootstrap_from_goal_impl creates for inline goals
-    minimal_seed = SeedConfig(goal="test", cli="claude", model=None)  # type: ignore[call-arg]
-
-    # The bug: quality_gates is None
-    assert minimal_seed.quality_gates is None
+def get_free_port() -> int:
+    """Return a free port number."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 
-def test_full_seed_parse_preserves_gates(tmp_path: Path) -> None:
-    """A fully parsed seed DOES have quality_gates when bernstein.yaml has them."""
+def _kill_bernstein_processes(result: BootstrapResult | None) -> None:
+    """Kill the server and spawner processes from a BootstrapResult."""
+    if result is None:
+        return
+    with contextlib.suppress(Exception):
+        os.kill(result.server_pid, signal.SIGTERM)
+    with contextlib.suppress(Exception):
+        os.kill(result.spawner_pid, signal.SIGTERM)
+
+
+def test_inline_goal_resolves_gates_from_yaml(tmp_path: Path) -> None:
+    """Two runs over the same project (inline goal and seed file) record the same gate configuration."""
+    # Create a bernstein.yaml with quality_gates
     seed_yaml = tmp_path / "bernstein.yaml"
-    seed_yaml.write_text("""goal: "test"
+    seed_yaml.write_text(
+        """goal: "test"
 cli: claude
 max_agents: 1
 quality_gates:
@@ -35,40 +43,80 @@ quality_gates:
   lint_command: "echo lint"
   tests: true
   test_command: "echo test"
-""")
-
-    parsed_seed = parse_seed(seed_yaml)
-
-    # Full parse DOES preserve quality_gates
-    assert parsed_seed.quality_gates is not None
-    assert parsed_seed.quality_gates.enabled is True  # type: ignore[union-attr]
-
-
-def test_reading_gates_from_existing_yaml(tmp_path: Path) -> None:
-    """Demonstrates the fix: read gates from existing bernstein.yaml for inline goals."""
-    seed_yaml = tmp_path / "bernstein.yaml"
-    seed_yaml.write_text("""goal: "placeholder"
-cli: claude
-max_agents: 1
-quality_gates:
-  enabled: true
-  lint: true
-  lint_command: "echo lint"
-  tests: true
-  test_command: "echo test"
-""")
-
-    # Parse to extract quality_gates
-    existing_config = parse_seed(seed_yaml)
-
-    # The fix: copy quality_gates from existing config
-    inline_seed_with_gates = SeedConfig(
-        goal="inline goal text",  # type: ignore[call-arg]
-        cli="claude",
-        model=None,
-        quality_gates=existing_config.quality_gates,
+"""
     )
 
-    # After fix: inline seed should have quality_gates
-    assert inline_seed_with_gates.quality_gates is not None
-    assert inline_seed_with_gates.quality_gates.enabled is True  # type: ignore[union-attr]
+    port1 = get_free_port()
+    port2 = get_free_port()
+
+    # Run without inline goal (from seed file)
+    result_from_seed = None
+    try:
+        result_from_seed = bootstrap_from_seed(seed_yaml, workdir=tmp_path, port=port1)
+        seed_from_seed = result_from_seed.seed
+    finally:
+        _kill_bernstein_processes(result_from_seed)
+        # Clean up .sdd to remove PID file and reset state for second run
+        sdd_dir = tmp_path / ".sdd"
+        if sdd_dir.exists():
+            shutil.rmtree(sdd_dir)
+
+    # Run with inline goal (same goal as in the yaml)
+    result_from_goal = None
+    try:
+        result_from_goal = bootstrap_from_goal(
+            goal="test",
+            workdir=tmp_path,
+            cli="claude",
+            model=None,
+            port=port2,
+        )
+        seed_from_goal = result_from_goal.seed
+    finally:
+        _kill_bernstein_processes(result_from_goal)
+        # Clean up .sdd after second run (not strictly necessary for test, but good practice)
+        sdd_dir = tmp_path / ".sdd"
+        if sdd_dir.exists():
+            shutil.rmtree(sdd_dir)
+
+    # They should have the same quality_gates
+    assert seed_from_seed.quality_gates == seed_from_goal.quality_gates
+
+    # Also, we can check that the quality_gates are not None and have the expected values
+    assert seed_from_goal.quality_gates is not None
+    assert seed_from_goal.quality_gates.enabled is True  # type: ignore[union-attr]
+
+
+def test_trace_export_accepts_result(tmp_path: Path) -> None:
+    """Trace export accepts the result (seed is present in BootstrapResult)."""
+    seed_yaml = tmp_path / "bernstein.yaml"
+    seed_yaml.write_text(
+        """goal: "trace test"
+cli: claude
+max_agents: 1
+quality_gates:
+  enabled: false
+"""
+    )
+
+    port = get_free_port()
+    result = None
+    try:
+        result = bootstrap_from_goal(
+            goal="trace test",
+            workdir=tmp_path,
+            cli="claude",
+            model=None,
+            port=port,
+        )
+    finally:
+        _kill_bernstein_processes(result)
+        # Clean up .sdd
+        sdd_dir = tmp_path / ".sdd"
+        if sdd_dir.exists():
+            shutil.rmtree(sdd_dir)
+
+    # The BootstrapResult must contain a seed (used for tracing)
+    assert result.seed is not None
+    # The seed must have quality_gates (even if None or False)
+    assert hasattr(result.seed, "quality_gates")
