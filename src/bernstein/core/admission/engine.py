@@ -380,7 +380,7 @@ class AdmissionEngine:
             assemble_receipt,
         )
         from bernstein.core.orchestration.supervisor_receipt import (
-            sign_supervisor_receipt as sign_escalation,
+            sign_receipt as sign_escalation,
         )
 
         # The audit slice that caused expiry: the grant + its renewals as the

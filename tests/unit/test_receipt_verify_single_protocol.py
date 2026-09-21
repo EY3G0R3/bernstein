@@ -50,30 +50,19 @@ PROTOCOL_MODULE = "core/receipts/protocol.py"
 #: add one.
 PENDING_VERIFY_RECEIPT = frozenset(
     {
-        "core/admission/receipts.py",
-        "core/orchestration/sla_receipt.py",
         "core/orchestration/supervisor_receipt.py",
-        "core/payments/receipt.py",
-        "core/persistence/journal_export.py",
-        "core/sandbox/selection_receipt.py",
     },
 )
 
 PENDING_SIGN_RECEIPT = frozenset(
     {
-        "core/admission/receipts.py",
-        "core/orchestration/sla_receipt.py",
         "core/orchestration/supervisor_receipt.py",
-        "core/sandbox/selection_receipt.py",
     },
 )
 
 PENDING_CANONICAL_RECEIPT_BYTES = frozenset(
     {
-        "core/admission/receipts.py",
-        "core/orchestration/sla_receipt.py",
         "core/orchestration/supervisor_receipt.py",
-        "core/sandbox/selection_receipt.py",
     },
 )
 
