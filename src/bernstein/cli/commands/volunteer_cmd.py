@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import click
+from bernstein.core.volunteer import autopilot_loop, volunteer_profile
+from bernstein.core.routing import model_registry
 
 if TYPE_CHECKING:
     from bernstein.core.volunteer import VolunteerManifest
