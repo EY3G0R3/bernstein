@@ -71,6 +71,7 @@ see its docstring for the canonical shape.
 | `runtime` | `{"platform": "software-only", "measurement": "sha256:0000…"}` — software evidence only; never a real hardware measurement. The all-zero digest is the honest way to say "no hardware measurement exists". |
 | `policy` | `{"bundle_hash": <sha256>, "enforcement_mode": "enforce"}`. |
 | `data_class` | Operator-declared data sensitivity; defaults to `confidential` when undeclared. |
+| `data_class` | Operator-declared data sensitivity. Allowed values: `restricted`, `internal`, `confidential`, `public`. Defaults to `confidential` when undeclared. Set in `bernstein.yaml` via `data_class: <value>`. |
 | `tool_transcript` | `{"hash": <sha256>, "call_count": <int>}` — hash over tool-call entries in the journal. |
 | `build_provenance` | `{"slsa_level": 0, "digest": <sha256>, "provenance_uri": <release page URL>}`. |
 | `appraisal` | `{"status": "none", "verifier": "https://bernstein.run/trace/verifier", "timestamp": <int>}`. |
@@ -83,6 +84,40 @@ The signed body is the JCS canonical JSON form of all fields except
 `signature` — optional members (`delegation`, `references`) are omitted
 entirely when absent, never emitted as `null`. RFC 8785 canonicalisation
 treats "key present" and "key absent" as different bytes.
+
+### Where each field is read from
+
+The emitter reads a run journal written by the orchestrator. The mapping
+from record member to the journal event and key it is sourced from:
+
+| Record member | Journal event | Journal key |
+|---|---|---|
+| `model.provider` | `agent_spawned` | `model_provider`, else the namespace prefix of `model_id` |
+| `model.model_id` | `agent_spawned` | `model_id` |
+| `model.version` | `agent_spawned` | `model_version` (optional) |
+| `policy.bundle_hash` | `run_started` | `gate_config` |
+| `data_class` | any event | `data_class` (optional) |
+| `tool_transcript` | `tool_call` | payload |
+| `iat` / `appraisal.timestamp` | last event | `ts` |
+
+When a session resolves no provider, a namespaced model identifier such as
+`omnilab/fleet-hard` journals `model_provider` as its namespace (`omnilab`)
+and keeps `model_id` whole. A bare identifier or an empty namespace is not a
+provider, so export still refuses rather than inventing a vendor name.
+
+`model_provider` is the model vendor the adapter declares (for example
+`anthropic` for a Claude Code worker), not the CLI adapter identifier that
+carried the spawn. An adapter that fronts several vendors, a gateway, or
+nothing it can name declares no vendor; its hop journals no
+`model_provider` key and export refuses it with the agent id, the same way
+it refuses an endpoint-routed worker.
+
+`model_id` is the identifier the operator configured, recorded as written. A
+role policy that asks for a tier - `sonnet`, `opus`, `haiku` - records that
+word, because that is what was asked for; the concrete dated identifier the
+adapter launched is not journaled. Pin a model in the role policy when the
+record has to name the exact model that ran, as it does for a record that
+leaves this install.
 
 ## What is deliberately NOT in a trust record
 
